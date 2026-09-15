@@ -17,14 +17,15 @@ html[dark] #youtube-memo-container {
 
 /* トグルボタン */
 #youtube-memo-toggle {
-  width: 100%;
-  padding: 10px 16px;
-  margin-bottom: 12px;
+  display: block;
+  width: auto;
+  padding: 6px 10px;
+  margin: 0 0 8px auto;
   background-color: var(--yt-spec-brand-button-background, #065fd4);
   color: white;
   border: none;
-  border-radius: 18px;
-  font-size: 14px;
+  border-radius: 14px;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   transition: background-color 0.2s ease;
@@ -90,7 +91,11 @@ html[dark] #youtube-memo-textarea {
 }
 
 .youtube-memo-hidden {
-  padding: 16px;
+  padding: 8px 12px;
+}
+
+.youtube-memo-hidden #youtube-memo-toggle {
+  margin-bottom: 0;
 }
 
 /* レスポンシブ対応 */
