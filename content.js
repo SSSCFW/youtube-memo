@@ -117,43 +117,71 @@ function adjustLayout() {
   }
 }
 
+let memoInitializationTimer = null;
+
+// 初期化を多重起動させずに予約する
+function scheduleMemoInitialization(delay = 250) {
+  if (memoInitializationTimer !== null) {
+    return;
+  }
+
+  memoInitializationTimer = setTimeout(() => {
+    memoInitializationTimer = null;
+    initializeMemo();
+  }, delay);
+}
+
+function cancelMemoInitialization() {
+  if (memoInitializationTimer !== null) {
+    clearTimeout(memoInitializationTimer);
+    memoInitializationTimer = null;
+  }
+}
+
 // メインの初期化関数
 function initializeMemo() {
-  // 動画ページかチェック
   const videoId = getVideoId();
+  const existingContainer = document.getElementById('youtube-memo-container');
+  const existingTextarea = document.getElementById('youtube-memo-textarea');
+
+  // 動画ページでない場合は既存のコンテナを削除
   if (!videoId) {
-    // 動画ページでない場合は既存のコンテナを削除
-    const existingContainer = document.getElementById('youtube-memo-container');
+    cancelMemoInitialization();
     if (existingContainer) {
       existingContainer.remove();
     }
     return;
   }
-  
-  // 既にメモコンテナが存在する場合
-  const existingContainer = document.getElementById('youtube-memo-container');
-  const existingTextarea = document.getElementById('youtube-memo-textarea');
-  
+
+  // YouTubeの右カラムが遅れて生成される場合も、見つかるまで待ち続ける
+  const secondary = document.querySelector('#secondary');
+  if (!secondary) {
+    scheduleMemoInitialization(500);
+    return;
+  }
+
+  cancelMemoInitialization();
+
   if (existingContainer && existingTextarea) {
-    // 同じ動画IDの場合は再作成しない
+    // 同じ動画IDならDOMを作り直さない
     const currentVideoId = existingTextarea.dataset.videoId;
     if (currentVideoId === videoId) {
+      // YouTube側の再描画で位置だけ変わった場合も正しい場所へ戻す
+      if (existingContainer.parentNode !== secondary) {
+        secondary.insertBefore(existingContainer, secondary.firstChild);
+      }
       return;
     }
-    
+
     // 違う動画の場合は新しいtextareaを作成
     const newTextarea = document.createElement('textarea');
     newTextarea.id = 'youtube-memo-textarea';
     newTextarea.placeholder = '歌詞やメモを入力してください...';
     newTextarea.dataset.videoId = videoId;
-    
-    // メモの読み込み
+
     loadMemo(videoId, newTextarea);
-    
-    // イベントリスナーを追加
     newTextarea.addEventListener('input', () => saveMemo(videoId, newTextarea.value));
-    
-    // リサイズ時に高さを保存
+
     let resizeTimeout;
     const observer = new ResizeObserver(() => {
       clearTimeout(resizeTimeout);
@@ -162,30 +190,23 @@ function initializeMemo() {
       }, 300);
     });
     observer.observe(newTextarea);
-    
+
     existingTextarea.parentNode.replaceChild(newTextarea, existingTextarea);
+    if (existingContainer.parentNode !== secondary) {
+      secondary.insertBefore(existingContainer, secondary.firstChild);
+    }
     return;
   }
-  
-  // プレイヤーが読み込まれるまで待機
-  const checkPlayer = setInterval(() => {
-    const secondary = document.querySelector('#secondary');
-    
-    if (secondary) {
-      clearInterval(checkPlayer);
-      
-      // 既にコンテナが存在しないことを再確認
-      if (!document.getElementById('youtube-memo-container')) {
-        const memoContainer = createMemoContainer();
-        const textarea = memoContainer.querySelector('#youtube-memo-textarea');
-        textarea.dataset.videoId = videoId;
-        secondary.insertBefore(memoContainer, secondary.firstChild);
-      }
-    }
-  }, 500);
-  
-  // 10秒後にタイムアウト
-  setTimeout(() => clearInterval(checkPlayer), 10000);
+
+  // 中途半端なDOMが残っている場合は作り直す
+  if (existingContainer) {
+    existingContainer.remove();
+  }
+
+  const memoContainer = createMemoContainer();
+  const textarea = memoContainer.querySelector('#youtube-memo-textarea');
+  textarea.dataset.videoId = videoId;
+  secondary.insertBefore(memoContainer, secondary.firstChild);
 }
 
 // ページ読み込み時に初期化
@@ -195,24 +216,27 @@ if (document.readyState === 'loading') {
   initializeMemo();
 }
 
-// YouTube のSPA遷移を検出
+// YouTube のSPA遷移とDOM再描画を検出
 let lastUrl = location.href;
-let urlCheckTimeout = null;
 new MutationObserver(() => {
   const url = location.href;
-  if (url !== lastUrl) {
+  const urlChanged = url !== lastUrl;
+  if (urlChanged) {
     lastUrl = url;
-    // 連続した変更を防ぐためdebounce
-    if (urlCheckTimeout) {
-      clearTimeout(urlCheckTimeout);
-    }
-    urlCheckTimeout = setTimeout(() => {
-      initializeMemo();
-    }, 500); // 1000msから500msに短縮
+  }
+
+  const videoId = getVideoId();
+  const container = document.getElementById('youtube-memo-container');
+  const textarea = document.getElementById('youtube-memo-textarea');
+  const memoMissing = videoId && (!container || !textarea);
+
+  // URL変更だけでなく、同じ動画のままYouTubeがメモDOMを消した場合も復元する
+  if (urlChanged || memoMissing) {
+    scheduleMemoInitialization(urlChanged ? 100 : 250);
   }
 }).observe(document, { subtree: true, childList: true });
 
-// ページ遷移をより確実に検出（ytInitialPlayerResponse変更も監視）
+// ページ遷移をより確実に検出
 window.addEventListener('yt-navigate-finish', () => {
-  setTimeout(initializeMemo, 300);
+  scheduleMemoInitialization(100);
 });
