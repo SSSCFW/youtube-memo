@@ -8,7 +8,7 @@
   const memoCache = new Map();
   const heightCache = new Map();
   const widthCache = new Map();
-  const MIN_MEMO_WIDTH = 280;
+  const MIN_MEMO_WIDTH = 320;
   const MIN_VIDEO_WIDTH = 480;
   const MAX_MEMO_WIDTH = 900;
   const writers = new Map();
