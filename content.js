@@ -147,6 +147,11 @@
       this.area.append(this.title, this.textarea);
 
       this.actions = makeElement('div', 'youtube-memo-actions');
+      // Keep page navigation visible outside detailed settings for multi-page notes.
+      this.previous = makeButton('youtube-memo-prev', '戻る', () => this.stepPage(-1));
+      this.previous.title = '前のページへ';
+      this.next = makeButton('youtube-memo-next', '前へ', () => this.stepPage(1));
+      this.next.title = '次のページへ';
       this.settingsToggle = makeButton('youtube-memo-settings-toggle', '詳細設定', () => {
         this.detailsOpen = !this.detailsOpen;
         this.renderVisibility();
@@ -157,7 +162,7 @@
         this.renderVisibility();
       });
       this.toggle.setAttribute('aria-controls', 'youtube-memo-area');
-      this.actions.append(this.settingsToggle, this.toggle);
+      this.actions.append(this.previous, this.next, this.settingsToggle, this.toggle);
 
       this.settings = makeElement('div', 'youtube-memo-settings');
       this.settings.hidden = true;
@@ -165,10 +170,12 @@
       const pageLabel = makeElement('label', null, 'ページ');
       pageLabel.htmlFor = 'youtube-memo-page-select';
       const navigation = makeElement('div', 'youtube-memo-navigation');
-      this.previous = makeButton('youtube-memo-prev', '前へ', () => this.stepPage(-1));
       this.select = makeElement('select', 'youtube-memo-page-select');
-      this.next = makeButton('youtube-memo-next', '次へ', () => this.stepPage(1));
-      navigation.append(this.previous, this.select, this.next);
+      navigation.append(this.select);
+      const reorder = makeElement('div', 'youtube-memo-reorder-actions');
+      this.moveUp = makeButton('youtube-memo-move-up', '上へ移動', () => this.movePage(-1));
+      this.moveDown = makeButton('youtube-memo-move-down', '下へ移動', () => this.movePage(1));
+      reorder.append(this.moveUp, this.moveDown);
       const editing = makeElement('div', 'youtube-memo-page-actions');
       this.add = makeButton('youtube-memo-add', 'ページを追加', () => this.addPage());
       this.remove = makeButton('youtube-memo-delete', 'このページを削除', () => this.deletePage());
@@ -195,7 +202,7 @@
       this.autoSwitch = makeElement('input', 'youtube-memo-auto-switch');
       this.autoSwitch.type = 'checkbox';
       autoLabel.append(this.autoSwitch, document.createTextNode('再生時間で自動切り替え（この動画）'));
-      this.settings.append(pageLabel, navigation, editing, timeLabel, timeRow, help, autoLabel);
+      this.settings.append(pageLabel, navigation, reorder, editing, timeLabel, timeRow, help, autoLabel);
 
       this.statusRow = makeElement('div', 'youtube-memo-status-row');
       this.status = makeElement('span', 'youtube-memo-status');
@@ -355,9 +362,14 @@
         field.disabled = !this.loaded;
       }
       const index = this.loaded ? this.memo.pages.findIndex((page) => page.id === this.memo.activePageId) : 0;
-      this.previous.disabled = !this.loaded || index === 0;
-      this.next.disabled = !this.loaded || index >= this.memo.pages.length - 1;
-      this.remove.disabled = !this.loaded || this.memo.pages.length <= 1;
+      const hasMultiplePages = this.loaded && this.memo.pages.length > 1;
+      this.previous.hidden = !hasMultiplePages;
+      this.next.hidden = !hasMultiplePages;
+      this.previous.disabled = !hasMultiplePages || index <= 0;
+      this.next.disabled = !hasMultiplePages || index >= this.memo.pages.length - 1;
+      this.moveUp.disabled = !hasMultiplePages || index <= 0;
+      this.moveDown.disabled = !hasMultiplePages || index >= this.memo.pages.length - 1;
+      this.remove.disabled = !hasMultiplePages;
       this.setTime.disabled = !this.loaded || !this.video;
     }
 
@@ -386,6 +398,19 @@
       const index = this.memo.pages.findIndex((page) => page.id === this.memo.activePageId);
       const page = this.memo.pages[index + direction];
       if (page) this.selectPage(page.id, true);
+    }
+
+    movePage(direction) {
+      if (!this.canEdit()) return;
+      const index = this.memo.pages.findIndex((page) => page.id === this.memo.activePageId);
+      const destination = index + direction;
+      if (index < 0 || destination < 0 || destination >= this.memo.pages.length) return;
+      // Move the page record as one unit, keeping its title, text, cue and ID together.
+      const [page] = this.memo.pages.splice(index, 1);
+      this.memo.pages.splice(destination, 0, page);
+      this.rememberPlaybackSegment();
+      this.renderPage();
+      this.persist();
     }
 
     addPage() {
