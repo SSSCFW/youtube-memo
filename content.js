@@ -1,242 +1,548 @@
-// YouTube動画のIDを取得
-function getVideoId() {
-  const urlParams = new URLSearchParams(window.location.search);
-  return urlParams.get('v');
-}
+(() => {
+  'use strict';
 
-// メモコンテナを作成
-function createMemoContainer() {
-  const container = document.createElement('div');
-  container.id = 'youtube-memo-container';
-  container.className = 'youtube-memo-visible';
-  
-  // トグルボタン
-  const toggleButton = document.createElement('button');
-  toggleButton.id = 'youtube-memo-toggle';
-  toggleButton.textContent = 'メモを非表示';
-  toggleButton.addEventListener('click', toggleMemo);
-  
-  // メモエリア
-  const memoArea = document.createElement('div');
-  memoArea.id = 'youtube-memo-area';
-  
-  const memoTitle = document.createElement('h3');
-  memoTitle.textContent = 'メモ';
-  memoTitle.style.margin = '0 0 10px 0';
-  
-  const textarea = document.createElement('textarea');
-  textarea.id = 'youtube-memo-textarea';
-  textarea.placeholder = '歌詞やメモを入力してください...';
-  
-  // メモの読み込みと保存
-  const videoId = getVideoId();
-  if (videoId) {
-    loadMemo(videoId, textarea);
-    textarea.addEventListener('input', () => saveMemo(videoId, textarea.value));
-    
-    // リサイズ時に高さを保存（ユーザーがドラッグでリサイズした時）
-    let resizeTimeout;
-    const observer = new ResizeObserver(() => {
-      clearTimeout(resizeTimeout);
-      resizeTimeout = setTimeout(() => {
-        saveHeight(videoId, textarea);
-      }, 300);
-    });
-    observer.observe(textarea);
+  if (globalThis.__youtubeMemoInitialized) return;
+  globalThis.__youtubeMemoInitialized = true;
+
+  const Model = globalThis.YouTubeMemoModel;
+  const memoCache = new Map();
+  const heightCache = new Map();
+  const writers = new Map();
+  let current = null;
+  let reconcileTimer = null;
+
+  function videoIdFromUrl() {
+    if (location.pathname !== '/watch') return null;
+    return new URLSearchParams(location.search).get('v') || null;
   }
-  
-  memoArea.appendChild(memoTitle);
-  memoArea.appendChild(textarea);
-  
-  container.appendChild(toggleButton);
-  container.appendChild(memoArea);
-  
-  return container;
-}
 
-// メモの表示/非表示を切り替え
-function toggleMemo() {
-  const container = document.getElementById('youtube-memo-container');
-  const button = document.getElementById('youtube-memo-toggle');
-  const memoArea = document.getElementById('youtube-memo-area');
-  
-  if (container.classList.contains('youtube-memo-visible')) {
-    container.classList.remove('youtube-memo-visible');
-    container.classList.add('youtube-memo-hidden');
-    button.textContent = 'メモを表示';
-    memoArea.style.display = 'none';
-  } else {
-    container.classList.remove('youtube-memo-hidden');
-    container.classList.add('youtube-memo-visible');
-    button.textContent = 'メモを非表示';
-    memoArea.style.display = 'block';
+  function storageError() {
+    return chrome.runtime && chrome.runtime.lastError;
   }
-}
 
-// メモをlocalStorageから読み込み
-function loadMemo(videoId, textarea) {
-  chrome.storage.local.get([`memo_${videoId}`, `height_${videoId}`], (result) => {
-    if (result[`memo_${videoId}`]) {
-      textarea.value = result[`memo_${videoId}`];
-    } else {
-      textarea.value = ''; // メモがない場合は空にする
+  // One serialized queue per video. A newer pending snapshot replaces an older one.
+  function queueWrite(videoId, values) {
+    let writer = writers.get(videoId);
+    if (!writer) {
+      writer = { pending: null, failed: null, saving: false, error: false };
+      writers.set(videoId, writer);
     }
-    if (result[`height_${videoId}`]) {
-      textarea.style.height = result[`height_${videoId}`];
-      textarea.style.minHeight = result[`height_${videoId}`];
-    } else {
-      textarea.style.height = '';
-      textarea.style.minHeight = '';
-    }
-  });
-}
-
-// メモをlocalStorageに保存
-function saveMemo(videoId, content) {
-  chrome.storage.local.set({ [`memo_${videoId}`]: content });
-}
-
-// メモの高さを保存
-function saveHeight(videoId, element) {
-  if (element) {
-    const height = window.getComputedStyle(element).height;
-    if (height && height !== 'auto') {
-      chrome.storage.local.set({ [`height_${videoId}`]: height });
-    }
-  }
-}
-
-// レイアウトを調整
-function adjustLayout() {
-  const secondary = document.querySelector('#secondary');
-  const container = document.getElementById('youtube-memo-container');
-  
-  if (secondary && container) {
-    // メモコンテナをセカンダリの前に挿入
-    secondary.parentNode.insertBefore(container, secondary);
-  }
-}
-
-let memoInitializationTimer = null;
-
-// 初期化を多重起動させずに予約する
-function scheduleMemoInitialization(delay = 250) {
-  if (memoInitializationTimer !== null) {
-    return;
+    writer.pending = Object.assign({}, writer.failed, writer.pending, values);
+    writer.failed = null;
+    writer.error = false;
+    flushWrite(videoId, writer);
   }
 
-  memoInitializationTimer = setTimeout(() => {
-    memoInitializationTimer = null;
-    initializeMemo();
-  }, delay);
-}
-
-function cancelMemoInitialization() {
-  if (memoInitializationTimer !== null) {
-    clearTimeout(memoInitializationTimer);
-    memoInitializationTimer = null;
-  }
-}
-
-// メインの初期化関数
-function initializeMemo() {
-  const videoId = getVideoId();
-  const existingContainer = document.getElementById('youtube-memo-container');
-  const existingTextarea = document.getElementById('youtube-memo-textarea');
-
-  // 動画ページでない場合は既存のコンテナを削除
-  if (!videoId) {
-    cancelMemoInitialization();
-    if (existingContainer) {
-      existingContainer.remove();
-    }
-    return;
-  }
-
-  // YouTubeの右カラムが遅れて生成される場合も、見つかるまで待ち続ける
-  const secondary = document.querySelector('#secondary');
-  if (!secondary) {
-    scheduleMemoInitialization(500);
-    return;
-  }
-
-  cancelMemoInitialization();
-
-  if (existingContainer && existingTextarea) {
-    // 同じ動画IDならDOMを作り直さない
-    const currentVideoId = existingTextarea.dataset.videoId;
-    if (currentVideoId === videoId) {
-      // YouTube側の再描画で位置だけ変わった場合も正しい場所へ戻す
-      if (existingContainer.parentNode !== secondary) {
-        secondary.insertBefore(existingContainer, secondary.firstChild);
+  function flushWrite(videoId, writer) {
+    if (writer.saving || !writer.pending) return;
+    const batch = writer.pending;
+    writer.pending = null;
+    writer.saving = true;
+    const finish = (error) => {
+      writer.saving = false;
+      writer.error = Boolean(error);
+      if (error) writer.failed = Object.assign({}, batch, writer.failed);
+      if (current && current.videoId === videoId) current.renderStatus();
+      // Retry a failed batch only when there is newer work or the user retries.
+      if (writer.pending) {
+        writer.pending = Object.assign({}, writer.failed, writer.pending);
+        writer.failed = null;
+        flushWrite(videoId, writer);
       }
+    };
+    try {
+      chrome.storage.local.set(batch, () => finish(storageError()));
+    } catch (error) {
+      finish(error);
+    }
+  }
+
+  function isVisible(element) {
+    if (!element || !element.isConnected) return false;
+    for (let node = element; node && node.nodeType === 1; node = node.parentElement) {
+      if (node.hidden || node.getAttribute('aria-hidden') === 'true') return false;
+      const style = getComputedStyle(node);
+      if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') {
+        return false;
+      }
+    }
+    // Empty layout containers can have zero height until the memo is inserted.
+    return true;
+  }
+
+  function firstVisible(root, selector) {
+    return [...root.querySelectorAll(selector)].find(isVisible) || null;
+  }
+
+  function findLayout(videoId) {
+    const allRoots = [...document.querySelectorAll('ytd-watch-flexy, ytd-watch-grid')];
+    const visibleRoots = allRoots.filter(isVisible);
+    const root = visibleRoots.find((node) => node.getAttribute('video-id') === videoId)
+      || visibleRoots.find((node) => !node.getAttribute('video-id'))
+      || (allRoots.length === 0 ? document : null);
+    if (!root) return null;
+    const sidebar = firstVisible(root, '#secondary');
+    if (sidebar) return { root, host: sidebar, prepend: true };
+    const below = firstVisible(root, '#below');
+    if (below) return { root, host: below, prepend: true };
+    const primary = firstVisible(root, '#primary-inner') || firstVisible(root, '#primary');
+    return primary ? { root, host: primary, prepend: false } : null;
+  }
+
+  function makeElement(tag, id, text) {
+    const element = document.createElement(tag);
+    if (id) element.id = id;
+    if (text) element.textContent = text;
+    return element;
+  }
+
+  function makeButton(id, text, callback) {
+    const button = makeElement('button', id, text);
+    button.type = 'button';
+    button.addEventListener('click', callback);
+    return button;
+  }
+
+  class MemoController {
+    constructor(videoId) {
+      this.videoId = videoId;
+      this.memo = null;
+      this.loaded = false;
+      this.disposed = false;
+      this.loadError = false;
+      this.validationError = '';
+      this.hidden = false;
+      this.detailsOpen = false;
+      this.composing = false;
+      this.lastAutoPageId = null;
+      this.video = null;
+      this.root = null;
+      this.resizeTimer = null;
+      this.focusTimer = null;
+      this.heightReady = false;
+      this.build();
+      this.onPlayback = () => this.syncPlayback();
+    }
+
+    isCurrent() {
+      return !this.disposed && current === this && videoIdFromUrl() === this.videoId;
+    }
+
+    build() {
+      this.container = makeElement('section', 'youtube-memo-container');
+      this.container.className = 'youtube-memo-visible';
+      this.container.setAttribute('aria-label', '動画のメモ');
+      this.container.dataset.videoId = this.videoId;
+
+      this.area = makeElement('div', 'youtube-memo-area');
+      this.title = makeElement('input', 'youtube-memo-page-title');
+      this.title.type = 'text';
+      this.title.hidden = true;
+      this.title.setAttribute('aria-label', 'ページタイトル');
+      this.title.autocomplete = 'off';
+      this.textarea = makeElement('textarea', 'youtube-memo-textarea');
+      this.textarea.dataset.videoId = this.videoId;
+      this.textarea.placeholder = '歌詞やメモを入力してください...';
+      this.textarea.setAttribute('aria-label', 'メモ');
+      this.area.append(this.title, this.textarea);
+
+      this.actions = makeElement('div', 'youtube-memo-actions');
+      this.settingsToggle = makeButton('youtube-memo-settings-toggle', '詳細設定', () => {
+        this.detailsOpen = !this.detailsOpen;
+        this.renderVisibility();
+      });
+      this.settingsToggle.setAttribute('aria-controls', 'youtube-memo-settings');
+      this.toggle = makeButton('youtube-memo-toggle', 'メモを非表示', () => {
+        this.hidden = !this.hidden;
+        this.renderVisibility();
+      });
+      this.toggle.setAttribute('aria-controls', 'youtube-memo-area');
+      this.actions.append(this.settingsToggle, this.toggle);
+
+      this.settings = makeElement('div', 'youtube-memo-settings');
+      this.settings.hidden = true;
+      this.settings.setAttribute('aria-label', 'メモの詳細設定');
+      const pageLabel = makeElement('label', null, 'ページ');
+      pageLabel.htmlFor = 'youtube-memo-page-select';
+      const navigation = makeElement('div', 'youtube-memo-navigation');
+      this.previous = makeButton('youtube-memo-prev', '前へ', () => this.stepPage(-1));
+      this.select = makeElement('select', 'youtube-memo-page-select');
+      this.next = makeButton('youtube-memo-next', '次へ', () => this.stepPage(1));
+      navigation.append(this.previous, this.select, this.next);
+      const editing = makeElement('div', 'youtube-memo-page-actions');
+      this.add = makeButton('youtube-memo-add', 'ページを追加', () => this.addPage());
+      this.remove = makeButton('youtube-memo-delete', 'このページを削除', () => this.deletePage());
+      editing.append(this.add, this.remove);
+
+      const timeLabel = makeElement('label', null, 'このページの開始時刻');
+      timeLabel.htmlFor = 'youtube-memo-start-time';
+      const timeRow = makeElement('div', 'youtube-memo-time-row');
+      this.startTime = makeElement('input', 'youtube-memo-start-time');
+      this.startTime.type = 'text';
+      this.startTime.placeholder = '例: 1:30（空欄は手動のみ）';
+      this.startTime.autocomplete = 'off';
+      this.startTime.spellcheck = false;
+      this.startTime.setAttribute('aria-describedby', 'youtube-memo-time-help');
+      this.setTime = makeButton('youtube-memo-set-time', '現在の再生時間を設定', () => {
+        if (!this.canEdit() || !this.video || !Number.isFinite(this.video.currentTime)) return;
+        this.startTime.value = Model.formatTime(Math.floor(this.video.currentTime));
+        this.saveStartTime();
+      });
+      timeRow.append(this.startTime, this.setTime);
+      const help = makeElement('p', 'youtube-memo-time-help',
+        '秒数・分:秒・時:分:秒で指定します。空欄のページは手動で切り替えます。');
+      const autoLabel = makeElement('label', 'youtube-memo-auto-label');
+      this.autoSwitch = makeElement('input', 'youtube-memo-auto-switch');
+      this.autoSwitch.type = 'checkbox';
+      autoLabel.append(this.autoSwitch, document.createTextNode('再生時間で自動切り替え（この動画）'));
+      this.settings.append(pageLabel, navigation, editing, timeLabel, timeRow, help, autoLabel);
+
+      this.statusRow = makeElement('div', 'youtube-memo-status-row');
+      this.status = makeElement('span', 'youtube-memo-status');
+      this.status.setAttribute('role', 'status');
+      this.retry = makeButton('youtube-memo-retry', '再試行', () => {
+        if (!this.isCurrent()) return;
+        if (this.loadError) this.load();
+        else {
+          const writer = writers.get(this.videoId);
+          if (writer && writer.failed) queueWrite(this.videoId, writer.failed);
+          this.renderStatus();
+        }
+      });
+      this.retry.hidden = true;
+      this.statusRow.append(this.status, this.retry);
+      this.container.append(this.area, this.actions, this.settings, this.statusRow);
+
+      this.textarea.addEventListener('input', () => {
+        if (!this.canEdit()) return;
+        this.activePage().content = this.textarea.value;
+        this.persist();
+      });
+      this.title.addEventListener('input', () => {
+        if (!this.canEdit()) return;
+        this.activePage().title = this.title.value;
+        this.renderOptions();
+        this.persist();
+      });
+      this.select.addEventListener('change', () => this.selectPage(this.select.value, true));
+      this.autoSwitch.addEventListener('change', () => {
+        if (!this.canEdit()) return;
+        this.memo.autoSwitch = this.autoSwitch.checked;
+        this.lastAutoPageId = null;
+        this.persist();
+        this.syncPlayback();
+      });
+      this.startTime.addEventListener('input', () => {
+        this.validationError = '';
+        this.startTime.removeAttribute('aria-invalid');
+        this.startTime.setCustomValidity('');
+        this.renderStatus();
+      });
+      this.startTime.addEventListener('change', () => this.saveStartTime());
+      for (const field of [this.title, this.textarea, this.startTime]) {
+        field.addEventListener('compositionstart', () => { this.composing = true; });
+        field.addEventListener('compositionend', () => {
+          this.composing = false;
+          this.schedulePlayback();
+        });
+        field.addEventListener('blur', () => this.schedulePlayback());
+      }
+
+      this.resizeObserver = new ResizeObserver(() => {
+        clearTimeout(this.resizeTimer);
+        if (!this.heightReady || !this.loaded || this.hidden || !this.isCurrent()) return;
+        this.resizeTimer = setTimeout(() => this.saveHeight(), 300);
+      });
+      this.resizeObserver.observe(this.textarea);
+      this.renderEnabled();
+      this.renderVisibility();
+      this.renderStatus();
+    }
+
+    canEdit() {
+      if (!this.isCurrent()) {
+        scheduleReconcile(0);
+        return false;
+      }
+      return this.loaded;
+    }
+
+    activePage() {
+      return this.memo.pages.find((page) => page.id === this.memo.activePageId) || this.memo.pages[0];
+    }
+
+    load() {
+      this.loadError = false;
+      this.renderStatus();
+      const key = 'memo_pages_' + this.videoId;
+      const legacyKey = 'memo_' + this.videoId;
+      const heightKey = 'height_' + this.videoId;
+      const complete = (result, error) => {
+        if (!this.isCurrent()) return;
+        if (error) {
+          this.loadError = true;
+          this.renderStatus();
+          return;
+        }
+        this.memo = Model.normalizeMemo(memoCache.get(this.videoId) || result[key], result[legacyKey]);
+        const height = heightCache.get(this.videoId) || result[heightKey];
+        if (typeof height === 'string' && /^\d+(?:\.\d+)?px$/.test(height) && parseFloat(height) > 0) {
+          this.textarea.style.height = height;
+        }
+        this.loaded = true;
+        this.renderPage();
+        this.renderStatus();
+        this.heightReady = true;
+        this.syncPlayback();
+      };
+      try {
+        chrome.storage.local.get([key, legacyKey, heightKey], (result) => complete(result || {}, storageError()));
+      } catch (error) {
+        complete({}, error);
+      }
+    }
+
+    persist() {
+      if (!this.loaded || !this.isCurrent()) return;
+      const snapshot = Model.normalizeMemo(this.memo);
+      memoCache.set(this.videoId, snapshot);
+      queueWrite(this.videoId, { ['memo_pages_' + this.videoId]: snapshot });
+      this.renderStatus();
+    }
+
+    renderStatus() {
+      let message = '';
+      if (this.loadError) message = 'メモを読み込めませんでした。再試行してください。';
+      else if (!this.loaded) message = 'メモを読み込み中...';
+      else if (this.validationError) message = this.validationError;
+      else if (writers.get(this.videoId)?.error) message = '保存できませんでした。再試行してください。';
+      if (this.status.textContent !== message) this.status.textContent = message;
+      this.statusRow.hidden = !message;
+      this.statusRow.classList.toggle('youtube-memo-error', Boolean(this.loadError || this.validationError || writers.get(this.videoId)?.error));
+      this.retry.hidden = !(this.loadError || writers.get(this.videoId)?.error);
+    }
+
+    renderOptions() {
+      const options = this.memo.pages.map((page, index) => {
+        const label = (index + 1) + '. ' + (page.title.trim() || 'ページ ' + (index + 1));
+        const option = makeElement('option', null, label);
+        option.value = page.id;
+        return option;
+      });
+      this.select.replaceChildren(...options);
+      this.select.value = this.memo.activePageId;
+    }
+
+    renderPage() {
+      const page = this.activePage();
+      this.title.hidden = this.memo.pages.length < 2;
+      this.title.value = page.title;
+      this.title.placeholder = 'ページ ' + (this.memo.pages.indexOf(page) + 1) + ' のタイトル';
+      this.textarea.value = page.content;
+      this.textarea.scrollTop = 0;
+      this.startTime.value = Model.formatTime(page.startTime);
+      this.validationError = '';
+      this.startTime.removeAttribute('aria-invalid');
+      this.startTime.setCustomValidity('');
+      this.autoSwitch.checked = this.memo.autoSwitch;
+      this.renderOptions();
+      this.renderEnabled();
+      this.renderStatus();
+    }
+
+    renderEnabled() {
+      for (const field of [this.title, this.textarea, this.select, this.startTime, this.autoSwitch, this.add]) {
+        field.disabled = !this.loaded;
+      }
+      const index = this.loaded ? this.memo.pages.findIndex((page) => page.id === this.memo.activePageId) : 0;
+      this.previous.disabled = !this.loaded || index === 0;
+      this.next.disabled = !this.loaded || index >= this.memo.pages.length - 1;
+      this.remove.disabled = !this.loaded || this.memo.pages.length <= 1;
+      this.setTime.disabled = !this.loaded || !this.video;
+    }
+
+    renderVisibility() {
+      this.area.hidden = this.hidden;
+      this.container.classList.toggle('youtube-memo-hidden', this.hidden);
+      this.container.classList.toggle('youtube-memo-visible', !this.hidden);
+      this.toggle.textContent = this.hidden ? 'メモを表示' : 'メモを非表示';
+      this.toggle.setAttribute('aria-expanded', String(!this.hidden));
+      this.settings.hidden = !this.detailsOpen;
+      this.settingsToggle.setAttribute('aria-expanded', String(this.detailsOpen));
+      if (this.hidden) clearTimeout(this.resizeTimer);
+    }
+
+    selectPage(id, manual = false) {
+      if (!this.canEdit() || !this.memo.pages.some((page) => page.id === id)) return;
+      if (manual) this.rememberPlaybackSegment();
+      if (this.memo.activePageId === id) return;
+      this.memo.activePageId = id;
+      this.renderPage();
+      this.persist();
+    }
+
+    stepPage(direction) {
+      if (!this.canEdit()) return;
+      const index = this.memo.pages.findIndex((page) => page.id === this.memo.activePageId);
+      const page = this.memo.pages[index + direction];
+      if (page) this.selectPage(page.id, true);
+    }
+
+    addPage() {
+      if (!this.canEdit()) return;
+      const page = Model.createPage(this.memo.pages);
+      this.memo.pages.push(page);
+      this.memo.activePageId = page.id;
+      this.rememberPlaybackSegment();
+      this.renderPage();
+      this.persist();
+      this.title.focus();
+    }
+
+    deletePage() {
+      if (!this.canEdit() || this.memo.pages.length <= 1) return;
+      const page = this.activePage();
+      if ((page.content || page.title) && !window.confirm('このページを削除しますか？メモとタイトルも削除されます。')) return;
+      const index = this.memo.pages.indexOf(page);
+      this.memo.pages.splice(index, 1);
+      this.memo.activePageId = this.memo.pages[Math.min(index, this.memo.pages.length - 1)].id;
+      this.rememberPlaybackSegment();
+      this.renderPage();
+      this.persist();
+    }
+
+    saveStartTime() {
+      if (!this.canEdit()) return;
+      const raw = this.startTime.value.trim();
+      const seconds = Model.parseTime(raw);
+      if (raw && seconds === null) {
+        this.validationError = '開始時刻を秒数・分:秒・時:分:秒で入力してください。';
+        this.startTime.setAttribute('aria-invalid', 'true');
+        this.startTime.setCustomValidity(this.validationError);
+        this.renderStatus();
+        return;
+      }
+      this.activePage().startTime = seconds;
+      this.startTime.value = Model.formatTime(seconds);
+      this.startTime.removeAttribute('aria-invalid');
+      this.startTime.setCustomValidity('');
+      this.validationError = '';
+      this.rememberPlaybackSegment();
+      this.persist();
+      this.renderStatus();
+    }
+
+    rememberPlaybackSegment() {
+      this.lastAutoPageId = this.video ? Model.getPageAtTime(this.memo.pages, this.video.currentTime) : null;
+    }
+
+    schedulePlayback() {
+      clearTimeout(this.focusTimer);
+      this.focusTimer = setTimeout(() => this.syncPlayback(), 0);
+    }
+
+    syncPlayback() {
+      if (!this.isCurrent() || !this.loaded || !this.memo.autoSwitch || !this.video) return;
+      if (this.composing || [this.title, this.textarea, this.startTime].includes(document.activeElement)) return;
+      if (this.video.closest('.ad-showing') || this.root?.querySelector('#movie_player.ad-showing')) return;
+      const target = Model.getPageAtTime(this.memo.pages, this.video.currentTime);
+      if (!target || target === this.lastAutoPageId) return;
+      this.lastAutoPageId = target;
+      this.selectPage(target);
+    }
+
+    bindVideo(root) {
+      this.root = root;
+      const video = root ? firstVisible(root, '#movie_player video, video.html5-main-video, video') : null;
+      if (this.video === video) return;
+      if (this.video) {
+        for (const type of ['timeupdate', 'seeking', 'seeked', 'loadedmetadata', 'durationchange', 'play']) {
+          this.video.removeEventListener(type, this.onPlayback);
+        }
+      }
+      this.video = video;
+      if (video) {
+        for (const type of ['timeupdate', 'seeking', 'seeked', 'loadedmetadata', 'durationchange', 'play']) {
+          video.addEventListener(type, this.onPlayback);
+        }
+      }
+      this.renderEnabled();
+      this.syncPlayback();
+    }
+
+    saveHeight() {
+      if (!this.isCurrent() || !this.loaded || this.hidden || !isVisible(this.textarea)) return;
+      const height = getComputedStyle(this.textarea).height;
+      if (!height.endsWith('px') || !Number.isFinite(parseFloat(height)) || parseFloat(height) <= 0) return;
+      if (heightCache.get(this.videoId) === height) return;
+      heightCache.set(this.videoId, height);
+      queueWrite(this.videoId, { ['height_' + this.videoId]: height });
+    }
+
+    dispose() {
+      this.disposed = true;
+      clearTimeout(this.resizeTimer);
+      clearTimeout(this.focusTimer);
+      this.resizeObserver.disconnect();
+      this.bindVideo(null);
+      this.container.remove();
+    }
+  }
+
+  function reconcile() {
+    const videoId = videoIdFromUrl();
+    // Invalidate the previous video before waiting for the next layout.
+    if (current && current.videoId !== videoId) {
+      current.dispose();
+      current = null;
+    }
+    if (!videoId) return;
+    if (!current) {
+      current = new MemoController(videoId);
+      current.load();
+    }
+    const layout = findLayout(videoId);
+    if (!layout) {
+      current.container.remove();
+      current.bindVideo(null);
       return;
     }
-
-    // 違う動画の場合は新しいtextareaを作成
-    const newTextarea = document.createElement('textarea');
-    newTextarea.id = 'youtube-memo-textarea';
-    newTextarea.placeholder = '歌詞やメモを入力してください...';
-    newTextarea.dataset.videoId = videoId;
-
-    loadMemo(videoId, newTextarea);
-    newTextarea.addEventListener('input', () => saveMemo(videoId, newTextarea.value));
-
-    let resizeTimeout;
-    const observer = new ResizeObserver(() => {
-      clearTimeout(resizeTimeout);
-      resizeTimeout = setTimeout(() => {
-        saveHeight(videoId, newTextarea);
-      }, 300);
-    });
-    observer.observe(newTextarea);
-
-    existingTextarea.parentNode.replaceChild(newTextarea, existingTextarea);
-    if (existingContainer.parentNode !== secondary) {
-      secondary.insertBefore(existingContainer, secondary.firstChild);
+    if (current.container.parentElement !== layout.host
+      || (layout.prepend && layout.host.firstElementChild !== current.container)) {
+      if (layout.prepend) layout.host.prepend(current.container);
+      else layout.host.appendChild(current.container);
     }
-    return;
+    current.bindVideo(layout.root);
+    current.syncPlayback();
   }
 
-  // 中途半端なDOMが残っている場合は作り直す
-  if (existingContainer) {
-    existingContainer.remove();
+  function scheduleReconcile(delay = 100) {
+    if (reconcileTimer !== null) return;
+    reconcileTimer = setTimeout(() => {
+      reconcileTimer = null;
+      reconcile();
+    }, delay);
   }
 
-  const memoContainer = createMemoContainer();
-  const textarea = memoContainer.querySelector('#youtube-memo-textarea');
-  textarea.dataset.videoId = videoId;
-  secondary.insertBefore(memoContainer, secondary.firstChild);
-}
+  new MutationObserver((records) => {
+    // Editor changes must not trigger an endless observer/render cycle.
+    if (records.some((record) => !current || !current.container.contains(record.target))) {
+      scheduleReconcile();
+    }
+  }).observe(document, {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    attributeFilter: ['hidden', 'style', 'class', 'video-id', 'aria-hidden'],
+  });
 
-// ページ読み込み時に初期化
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', initializeMemo);
-} else {
-  initializeMemo();
-}
-
-// YouTube のSPA遷移とDOM再描画を検出
-let lastUrl = location.href;
-new MutationObserver(() => {
-  const url = location.href;
-  const urlChanged = url !== lastUrl;
-  if (urlChanged) {
-    lastUrl = url;
+  for (const type of ['yt-navigate-finish', 'yt-page-data-updated', 'popstate', 'pageshow', 'resize']) {
+    window.addEventListener(type, () => scheduleReconcile(0));
   }
-
-  const videoId = getVideoId();
-  const container = document.getElementById('youtube-memo-container');
-  const textarea = document.getElementById('youtube-memo-textarea');
-  const memoMissing = videoId && (!container || !textarea);
-
-  // URL変更だけでなく、同じ動画のままYouTubeがメモDOMを消した場合も復元する
-  if (urlChanged || memoMissing) {
-    scheduleMemoInitialization(urlChanged ? 100 : 250);
-  }
-}).observe(document, { subtree: true, childList: true });
-
-// ページ遷移をより確実に検出
-window.addEventListener('yt-navigate-finish', () => {
-  scheduleMemoInitialization(100);
-});
+  document.addEventListener('fullscreenchange', () => scheduleReconcile(0));
+  document.addEventListener('visibilitychange', () => scheduleReconcile(0));
+  document.addEventListener('DOMContentLoaded', () => scheduleReconcile(0));
+  // Also recover from missed SPA events, history changes, or attribute-only layout swaps.
+  setInterval(reconcile, 1000);
+  reconcile();
+})();
