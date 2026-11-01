@@ -1,2 +1,5 @@
 *.zip
 ./vscode/*
+
+node_modules/
+test-results/

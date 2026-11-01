@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YouTube Memo",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "YouTube動画にオフラインメモを追加できる拡張機能",
   "permissions": [
     "storage"
@@ -12,7 +12,7 @@
   "content_scripts": [
     {
       "matches": ["https://www.youtube.com/*"],
-      "js": ["content.js"],
+      "js": ["memo-model.js", "content.js"],
       "css": ["styles.css"],
       "run_at": "document_end"
     }
