@@ -23,8 +23,10 @@ test('memo toggle button uses a compact intrinsic-width layout', () => {
 test('title gap is compact and the action row does not wrap', () => {
   const css = fs.readFileSync(path.join(__dirname, '..', 'styles.css'), 'utf8');
   const title = getRule(css, '#youtube-memo-page-title');
+  const titleRow = getRule(css, '#youtube-memo-title-row');
   const actions = getRule(css, '#youtube-memo-actions');
-  assert.match(title, /margin:\s*0\s+0\s+4px\s*;/);
+  assert.match(title, /margin:\s*0\s*;/);
+  assert.match(titleRow, /margin-bottom:\s*4px\s*;/);
   assert.match(title, /padding:\s*3px\s+2px\s*;/);
   assert.match(actions, /flex-wrap:\s*nowrap\s*;/);
 });
