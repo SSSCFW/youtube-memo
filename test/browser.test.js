@@ -432,6 +432,7 @@ test('keeps a real resized height when the memo is collapsed and expanded', asyn
   await page.waitForTimeout(500);
   assert.equal(await page.evaluate(() => window.__storage.data['height_video-a']), '280px');
   await page.locator('#youtube-memo-header-show').click();
+  await ready(page);
   assert.equal(await page.locator('#youtube-memo-area').isVisible(), true);
   assert.equal(await page.locator('#youtube-memo-textarea').evaluate((element) => getComputedStyle(element).height), '280px');
 });
@@ -697,24 +698,15 @@ test('remembers separate video widths and resets only the active video', async (
   const page = await createFixture(t);
   await ready(page);
   const grip = page.locator('#youtube-memo-width-handle');
+  await grip.waitFor({ state: 'visible' });
   await grip.focus();
   await grip.press('ArrowLeft');
-  console.log('DEBUG MEMO WIDTH', JSON.stringify(await page.evaluate(() => ({
-    active: document.activeElement?.id,
-    aria: document.getElementById('youtube-memo-width-handle')?.getAttribute('aria-valuenow'),
-    isHidden: document.getElementById('youtube-memo-width-handle')?.hidden,
-    rootClass: document.getElementById('watch-video-a')?.className,
-    rootStyle: document.getElementById('watch-video-a')?.style.getPropertyValue('--youtube-memo-sidebar-width'),
-    secondaryWidth: document.getElementById('secondary')?.getBoundingClientRect().width,
-    data: window.__storage.data['memo_sidebar_width_video-a'],
-    pending: window.__storage.writes,
-    error: document.getElementById('youtube-memo-status')?.textContent,
-  }))));
   await page.waitForFunction(() => Number.isFinite(window.__storage.data['memo_sidebar_width_video-a']));
   const widthA = await page.evaluate(() => window.__storage.data['memo_sidebar_width_video-a']);
   await navigate(page, 'video-b');
   await ready(page, 'video-b');
   assert.equal(await page.locator('#watch-video-b').evaluate((el) => el.classList.contains('youtube-memo-width-layout')), false);
+  await page.locator('#youtube-memo-width-handle').waitFor({ state: 'visible' });
   await page.locator('#youtube-memo-width-handle').focus();
   await page.locator('#youtube-memo-width-handle').press('ArrowLeft');
   await page.locator('#youtube-memo-width-handle').press('ArrowLeft');
@@ -744,6 +736,7 @@ test('remembers separate video widths and resets only the active video', async (
 test('temporarily disables width customization for mobile and theater without losing saved width', async (t) => {
   const page = await createFixture(t);
   await ready(page);
+  await page.locator('#youtube-memo-width-handle').waitFor({ state: 'visible' });
   await page.locator('#youtube-memo-width-handle').focus();
   await page.locator('#youtube-memo-width-handle').press('ArrowLeft');
   await page.waitForFunction(() => Number.isFinite(window.__storage.data['memo_sidebar_width_video-a']));
@@ -764,6 +757,7 @@ test('temporarily disables width customization for mobile and theater without lo
 test('hiding a resized memo restores native sidebar width and showing it reapplies the saved width', async (t) => {
   const page = await createFixture(t);
   await ready(page);
+  await page.locator('#youtube-memo-width-handle').waitFor({ state: 'visible' });
   await page.locator('#youtube-memo-width-handle').focus();
   await page.locator('#youtube-memo-width-handle').press('ArrowLeft');
   await page.waitForFunction(() => Number.isFinite(window.__storage.data['memo_sidebar_width_video-a']));
