@@ -7,6 +7,10 @@
   const Model = globalThis.YouTubeMemoModel;
   const memoCache = new Map();
   const heightCache = new Map();
+  const widthCache = new Map();
+  const MIN_MEMO_WIDTH = 320;
+  const MIN_VIDEO_WIDTH = 480;
+  const MAX_MEMO_WIDTH = 900;
   const writers = new Map();
   let current = null;
   let reconcileTimer = null;
@@ -89,6 +93,26 @@
     return primary ? { root, host: primary, prepend: false } : null;
   }
 
+  // Only change two-column watch layouts. Respect mobile, theater and fullscreen.
+  function resizableColumns(layout) {
+    if (!layout || layout.host.id !== 'secondary' || window.innerWidth < 1050) return null;
+    const root = layout.root;
+    if (root.nodeType !== 1 || root.matches('[fullscreen], [theater]')) return null;
+    const columns = root.querySelector('#columns');
+    const primary = columns?.querySelector(':scope > #primary');
+    const secondary = columns?.querySelector(':scope > #secondary');
+    if (!primary || secondary !== layout.host || !isVisible(primary) || !isVisible(secondary)) return null;
+    const outer = columns.getBoundingClientRect();
+    const video = primary.getBoundingClientRect();
+    const memo = secondary.getBoundingClientRect();
+    if (video.width < MIN_VIDEO_WIDTH || memo.width < 200 ||
+        memo.left <= video.left || Math.abs(video.top - memo.top) > 64) return null;
+    const offset = Math.max(0, video.left - outer.left);
+    const gap = Math.max(0, memo.left - video.right);
+    const maxWidth = Math.floor(Math.min(MAX_MEMO_WIDTH, outer.width - offset - gap - MIN_VIDEO_WIDTH));
+    return maxWidth >= MIN_MEMO_WIDTH ? { root, columns, secondary, maxWidth } : null;
+  }
+
   function makeElement(tag, id, text) {
     const element = document.createElement(tag);
     if (id) element.id = id;
@@ -120,6 +144,10 @@
       this.resizeTimer = null;
       this.focusTimer = null;
       this.heightReady = false;
+      this.sidebarWidth = null;
+      this.widthLayout = null;
+      this.widthDrag = null;
+      this.currentLayout = null;
       this.build();
       this.onPlayback = () => this.syncPlayback();
     }
@@ -144,7 +172,33 @@
       this.textarea.dataset.videoId = this.videoId;
       this.textarea.placeholder = '歌詞やメモを入力してください...';
       this.textarea.setAttribute('aria-label', 'メモ');
-      this.area.append(this.title, this.textarea);
+      // The title navigation mirrors the bottom page controls.
+      this.titleRow = makeElement('div', 'youtube-memo-title-row');
+      this.titleNav = makeElement('div', 'youtube-memo-title-navigation');
+      this.titlePrevious = makeButton('youtube-memo-title-prev', '戻る', () => this.stepPage(-1));
+      this.titleNext = makeButton('youtube-memo-title-next', '前へ', () => this.stepPage(1));
+      this.titleNav.append(this.titlePrevious, this.titleNext);
+      this.titleRow.append(this.title, this.titleNav);
+      this.titleRow.hidden = true;
+      this.area.append(this.titleRow, this.textarea);
+
+      // The drag grip lives on the memo's left edge, adjoining the video.
+      this.widthHandle = makeElement('div', 'youtube-memo-width-handle', '⋮');
+      this.widthHandle.hidden = true;
+      this.widthHandle.tabIndex = 0;
+      this.widthHandle.setAttribute('role', 'separator');
+      this.widthHandle.setAttribute('aria-orientation', 'vertical');
+      this.widthHandle.setAttribute('aria-label', '動画とメモの横幅を調整');
+      this.widthHandle.title = '左右にドラッグして横幅を調整（左右キーでも操作できます）';
+      this.widthHandle.addEventListener('pointerdown', (event) => this.beginWidthDrag(event));
+      this.widthHandle.addEventListener('keydown', (event) => this.resizeWidthWithKeyboard(event));
+
+      this.headerShow = makeButton('youtube-memo-header-show', 'メモを表示', () => {
+        if (!this.isCurrent()) return;
+        this.hidden = false;
+        this.renderVisibility();
+        scheduleReconcile(0);
+      });
 
       this.actions = makeElement('div', 'youtube-memo-actions');
       // Keep page navigation visible outside detailed settings for multi-page notes.
@@ -160,6 +214,7 @@
       this.toggle = makeButton('youtube-memo-toggle', 'メモを非表示', () => {
         this.hidden = !this.hidden;
         this.renderVisibility();
+        scheduleReconcile(0);
       });
       this.toggle.setAttribute('aria-controls', 'youtube-memo-area');
       this.actions.append(this.previous, this.next, this.settingsToggle, this.toggle);
@@ -202,7 +257,10 @@
       this.autoSwitch = makeElement('input', 'youtube-memo-auto-switch');
       this.autoSwitch.type = 'checkbox';
       autoLabel.append(this.autoSwitch, document.createTextNode('再生時間で自動切り替え（この動画）'));
-      this.settings.append(pageLabel, navigation, reorder, editing, timeLabel, timeRow, help, autoLabel);
+      const widthRow = makeElement('div', 'youtube-memo-width-settings');
+      this.widthReset = makeButton('youtube-memo-width-reset', '横幅をリセット', () => this.resetWidth());
+      widthRow.append(this.widthReset);
+      this.settings.append(pageLabel, navigation, reorder, editing, timeLabel, timeRow, help, autoLabel, widthRow);
 
       this.statusRow = makeElement('div', 'youtube-memo-status-row');
       this.status = makeElement('span', 'youtube-memo-status');
@@ -218,7 +276,7 @@
       });
       this.retry.hidden = true;
       this.statusRow.append(this.status, this.retry);
-      this.container.append(this.area, this.actions, this.settings, this.statusRow);
+      this.container.append(this.widthHandle, this.area, this.actions, this.settings, this.statusRow);
 
       this.textarea.addEventListener('input', () => {
         if (!this.canEdit()) return;
@@ -284,6 +342,7 @@
       const key = 'memo_pages_' + this.videoId;
       const legacyKey = 'memo_' + this.videoId;
       const heightKey = 'height_' + this.videoId;
+      const widthKey = 'memo_sidebar_width_' + this.videoId;
       const complete = (result, error) => {
         if (!this.isCurrent()) return;
         if (error) {
@@ -296,14 +355,18 @@
         if (typeof height === 'string' && /^\d+(?:\.\d+)?px$/.test(height) && parseFloat(height) > 0) {
           this.textarea.style.height = height;
         }
+        const savedWidth = widthCache.has(this.videoId) ? widthCache.get(this.videoId) : result[widthKey];
+        this.sidebarWidth = Number.isFinite(savedWidth) && savedWidth >= MIN_MEMO_WIDTH
+          ? Math.min(MAX_MEMO_WIDTH, Math.round(savedWidth)) : null;
         this.loaded = true;
         this.renderPage();
         this.renderStatus();
         this.heightReady = true;
         this.syncPlayback();
+        scheduleReconcile(0);
       };
       try {
-        chrome.storage.local.get([key, legacyKey, heightKey], (result) => complete(result || {}, storageError()));
+        chrome.storage.local.get([key, legacyKey, heightKey, widthKey], (result) => complete(result || {}, storageError()));
       } catch (error) {
         complete({}, error);
       }
@@ -342,6 +405,7 @@
 
     renderPage() {
       const page = this.activePage();
+      this.titleRow.hidden = this.memo.pages.length < 2;
       this.title.hidden = this.memo.pages.length < 2;
       this.title.value = page.title;
       this.title.placeholder = 'ページ ' + (this.memo.pages.indexOf(page) + 1) + ' のタイトル';
@@ -367,10 +431,13 @@
       this.next.hidden = !hasMultiplePages;
       this.previous.disabled = !hasMultiplePages || index <= 0;
       this.next.disabled = !hasMultiplePages || index >= this.memo.pages.length - 1;
+      this.titlePrevious.disabled = this.previous.disabled;
+      this.titleNext.disabled = this.next.disabled;
       this.moveUp.disabled = !hasMultiplePages || index <= 0;
       this.moveDown.disabled = !hasMultiplePages || index >= this.memo.pages.length - 1;
       this.remove.disabled = !hasMultiplePages;
       this.setTime.disabled = !this.loaded || !this.video;
+      this.widthReset.disabled = !this.loaded || this.sidebarWidth === null;
     }
 
     renderVisibility() {
@@ -381,7 +448,144 @@
       this.toggle.setAttribute('aria-expanded', String(!this.hidden));
       this.settings.hidden = !this.detailsOpen;
       this.settingsToggle.setAttribute('aria-expanded', String(this.detailsOpen));
-      if (this.hidden) clearTimeout(this.resizeTimer);
+      if (this.hidden) {
+        clearTimeout(this.resizeTimer);
+        this.stopWidthDrag(true);
+      }
+    }
+
+    mountHeaderShow() {
+      const center = document.querySelector('ytd-masthead #center') ||
+        document.querySelector('#masthead-container #center');
+      if (!center || !isVisible(center)) {
+        this.headerShow.remove();
+        return;
+      }
+      const voice = center.querySelector('#voice-search-button');
+      const voiceIsChild = voice && voice.parentElement === center;
+      if (this.headerShow.parentElement !== center ||
+          (voiceIsChild && voice.nextElementSibling !== this.headerShow)) {
+        if (voiceIsChild) voice.after(this.headerShow);
+        else center.append(this.headerShow);
+      }
+    }
+
+    clearWidthLayout() {
+      if (!this.widthLayout) return;
+      this.widthLayout.root.classList.remove('youtube-memo-width-layout');
+      this.widthLayout.root.style.removeProperty('--youtube-memo-sidebar-width');
+      this.widthLayout = null;
+    }
+
+    applyWidthLayout(layout) {
+      const next = !this.hidden && this.loaded ? resizableColumns(layout) : null;
+      if (this.widthLayout && this.widthLayout.root !== next?.root) this.clearWidthLayout();
+      this.widthLayout = next;
+      this.widthHandle.hidden = !next;
+      if (!next) {
+        this.widthHandle.removeAttribute('aria-valuenow');
+        return;
+      }
+      const width = this.sidebarWidth === null ? null :
+        Math.max(MIN_MEMO_WIDTH, Math.min(next.maxWidth, this.sidebarWidth));
+      if (width === null) {
+        next.root.classList.remove('youtube-memo-width-layout');
+        next.root.style.removeProperty('--youtube-memo-sidebar-width');
+      } else {
+        const size = width + 'px';
+        if (next.root.style.getPropertyValue('--youtube-memo-sidebar-width') !== size) {
+          next.root.style.setProperty('--youtube-memo-sidebar-width', size);
+        }
+        next.root.classList.add('youtube-memo-width-layout');
+      }
+      const effective = width ?? Math.round(next.secondary.getBoundingClientRect().width);
+      this.widthHandle.setAttribute('aria-valuenow', String(effective));
+      this.widthHandle.setAttribute('aria-valuemin', String(MIN_MEMO_WIDTH));
+      this.widthHandle.setAttribute('aria-valuemax', String(next.maxWidth));
+    }
+
+    saveWidth(value) {
+      if (!this.canEdit()) return;
+      this.sidebarWidth = value;
+      widthCache.set(this.videoId, value);
+      queueWrite(this.videoId, { ['memo_sidebar_width_' + this.videoId]: value });
+      this.renderEnabled();
+      this.renderStatus();
+    }
+
+    resetWidth() {
+      if (!this.canEdit()) return;
+      this.stopWidthDrag(true);
+      this.saveWidth(null);
+      this.applyWidthLayout(this.currentLayout);
+    }
+
+    beginWidthDrag(event) {
+      if (event.button !== 0 || this.hidden || !this.loaded || !this.widthLayout) return;
+      event.preventDefault();
+      if (this.widthDrag) this.stopWidthDrag(true);
+      this.widthDrag = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startWidth: Math.round(this.widthLayout.secondary.getBoundingClientRect().width),
+        original: this.sidebarWidth,
+        maxWidth: this.widthLayout.maxWidth,
+      };
+      this.onWidthMove = (e) => this.moveWidthDrag(e);
+      this.onWidthEnd = (e) => this.stopWidthDrag(false, e);
+      this.onWidthCancel = (e) => this.stopWidthDrag(true, e);
+      window.addEventListener('pointermove', this.onWidthMove);
+      window.addEventListener('pointerup', this.onWidthEnd);
+      window.addEventListener('pointercancel', this.onWidthCancel);
+      document.documentElement.classList.add('youtube-memo-dragging');
+      if (this.widthHandle.setPointerCapture) this.widthHandle.setPointerCapture(event.pointerId);
+    }
+
+    moveWidthDrag(event) {
+      const drag = this.widthDrag;
+      if (!drag || event.pointerId !== drag.pointerId || !this.isCurrent()) return;
+      const width = Math.round(Math.max(MIN_MEMO_WIDTH,
+        Math.min(drag.maxWidth, drag.startWidth + drag.startX - event.clientX)));
+      if (width === this.sidebarWidth) return;
+      this.sidebarWidth = width;
+      this.applyWidthLayout(this.currentLayout);
+      this.renderEnabled();
+    }
+
+    stopWidthDrag(cancel, event) {
+      const drag = this.widthDrag;
+      if (!drag || (event && event.pointerId !== drag.pointerId)) return;
+      this.widthDrag = null;
+      window.removeEventListener('pointermove', this.onWidthMove);
+      window.removeEventListener('pointerup', this.onWidthEnd);
+      window.removeEventListener('pointercancel', this.onWidthCancel);
+      document.documentElement.classList.remove('youtube-memo-dragging');
+      if (this.widthHandle.hasPointerCapture?.(drag.pointerId)) {
+        this.widthHandle.releasePointerCapture(drag.pointerId);
+      }
+      if (cancel || this.sidebarWidth === drag.original ||
+          Math.abs((this.sidebarWidth ?? drag.startWidth) - drag.startWidth) < 1) {
+        this.sidebarWidth = drag.original;
+        this.applyWidthLayout(this.currentLayout);
+        this.renderEnabled();
+        return;
+      }
+      this.saveWidth(this.sidebarWidth);
+      this.applyWidthLayout(this.currentLayout);
+    }
+
+    resizeWidthWithKeyboard(event) {
+      if (!['ArrowLeft', 'ArrowRight'].includes(event.key) ||
+          this.hidden || !this.loaded || !this.widthLayout) return;
+      event.preventDefault();
+      const currentWidth = this.sidebarWidth ??
+        this.widthLayout.secondary.getBoundingClientRect().width;
+      const delta = event.key === 'ArrowLeft' ? 24 : -24;
+      const width = Math.round(Math.max(MIN_MEMO_WIDTH,
+        Math.min(this.widthLayout.maxWidth, currentWidth + delta)));
+      if (width === Math.round(currentWidth)) return;
+      this.saveWidth(width);
+      this.applyWidthLayout(this.currentLayout);
     }
 
     selectPage(id, manual = false) {
@@ -505,6 +709,9 @@
     }
 
     dispose() {
+      this.stopWidthDrag(true);
+      this.clearWidthLayout();
+      this.headerShow.remove();
       this.disposed = true;
       clearTimeout(this.resizeTimer);
       clearTimeout(this.focusTimer);
@@ -527,8 +734,21 @@
       current.load();
     }
     const layout = findLayout(videoId);
+    current.currentLayout = layout;
+    if (current.hidden) {
+      // The related-video list is never covered by a collapsed memo panel.
+      current.container.remove();
+      current.clearWidthLayout();
+      current.widthHandle.hidden = true;
+      current.mountHeaderShow();
+      current.bindVideo(layout?.root || null);
+      return;
+    }
+    current.headerShow.remove();
     if (!layout) {
       current.container.remove();
+      current.clearWidthLayout();
+      current.widthHandle.hidden = true;
       current.bindVideo(null);
       return;
     }
@@ -538,6 +758,7 @@
       else layout.host.appendChild(current.container);
     }
     current.bindVideo(layout.root);
+    current.applyWidthLayout(layout);
     current.syncPlayback();
   }
 
