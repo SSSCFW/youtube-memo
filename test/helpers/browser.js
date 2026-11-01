@@ -45,7 +45,10 @@ function fixtureHtml(videoId, options) {
     h1 { font-size: 18px; }
     ytd-watch-flexy { display: block; }
     [hidden] { display: none !important; }
-    #columns { display: flex; align-items: flex-start; gap: 24px; }
+    #masthead-container { height: 56px; margin: -16px -16px 16px; padding: 0 32px; background: #222; color: #fff; }
+    #masthead #center { height: 56px; display: flex; align-items: center; }
+    #voice-search-button { border-radius: 50%; background: #444; width: 36px; height: 36px; }
+    #columns { display: flex; align-items: flex-start; gap: 24px; width: 100%; }
     #primary { width: 700px; min-width: 0; min-height: 240px; }
     #secondary { width: 360px; min-width: 0; min-height: 240px; }
     #movie_player { width: 100%; height: 180px; background: #222; }
@@ -54,7 +57,7 @@ function fixtureHtml(videoId, options) {
       #columns { flex-direction: column; }
       #primary, #secondary { width: 100%; }
     }
-  </style></head><body><h1 tabindex="0">Fixture video</h1>${hiddenDuplicate}${watchLayout(videoId, options)}</body></html>`;
+  </style></head><body><div id="masthead-container"><ytd-masthead id="masthead"><div id="center"><span>検索</span><div id="voice-search-button" aria-label="音声検索"></div></div></ytd-masthead></div><h1 tabindex="0">Fixture video</h1>${hiddenDuplicate}${watchLayout(videoId, options)}</body></html>`;
 }
 
 // Stub only the extension API boundary. DOM, timers, observers and events remain Chromium's.

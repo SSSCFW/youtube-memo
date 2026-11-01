@@ -427,10 +427,11 @@ test('keeps a real resized height when the memo is collapsed and expanded', asyn
   await page.waitForFunction(() => window.__storage.data['height_video-a'] === '280px');
   await page.locator('#youtube-memo-toggle').click();
   assert.equal(await page.locator('#youtube-memo-area').isVisible(), false);
-  assert.equal(await page.locator('#youtube-memo-toggle').textContent(), 'メモを表示');
+  assert.equal(await page.locator('#youtube-memo-header-show').textContent(), 'メモを表示');
+  assert.equal(await page.locator('#secondary #youtube-memo-container').count(), 0);
   await page.waitForTimeout(500);
   assert.equal(await page.evaluate(() => window.__storage.data['height_video-a']), '280px');
-  await page.locator('#youtube-memo-toggle').click();
+  await page.locator('#youtube-memo-header-show').click();
   assert.equal(await page.locator('#youtube-memo-area').isVisible(), true);
   assert.equal(await page.locator('#youtube-memo-textarea').evaluate((element) => getComputedStyle(element).height), '280px');
 });
@@ -509,7 +510,7 @@ test('shows bottom page navigation without expanding settings only when multiple
   await page.locator('#youtube-memo-toggle').click();
   assert.equal(await page.locator('#youtube-memo-area').isVisible(), false);
   assert.equal(await page.locator('#youtube-memo-prev').isVisible(), true);
-  await page.locator('#youtube-memo-toggle').click();
+  await page.locator('#youtube-memo-header-show').click();
   await textEquals(page, 'Second page');
 });
 
@@ -594,4 +595,172 @@ test('reduces the visible page title spacing above the editor', async (t) => {
   assert.equal(metrics.paddingTop, '3px');
   assert.equal(metrics.paddingBottom, '3px');
   assert.ok(metrics.gap <= 5, 'title and memo should have a small gap');
+});
+
+
+test('shows page switching controls next to the title as well as below the memo', async (t) => {
+  const page = await createFixture(t, { saved: { 'memo_pages_video-a': record() } });
+  await ready(page);
+  const titleRow = page.locator('#youtube-memo-title-row');
+  assert.equal(await titleRow.isVisible(), true);
+  assert.equal(await page.locator('#youtube-memo-title-prev').textContent(), '戻る');
+  assert.equal(await page.locator('#youtube-memo-title-next').textContent(), '前へ');
+  const [titleBounds, navBounds] = await Promise.all([
+    page.locator('#youtube-memo-page-title').boundingBox(),
+    page.locator('#youtube-memo-title-navigation').boundingBox(),
+  ]);
+  assert.ok(navBounds.x > titleBounds.x + titleBounds.width - 2, 'title buttons are aligned on its right');
+  assert.ok(Math.abs(navBounds.y - titleBounds.y) < 25, 'title buttons are vertically aligned');
+
+  assert.equal(await page.locator('#youtube-memo-title-prev').isDisabled(), true);
+  await page.locator('#youtube-memo-title-next').click();
+  await textEquals(page, 'Second page');
+  assert.equal(await page.locator('#youtube-memo-page-title').inputValue(), 'Middle');
+  await page.locator('#youtube-memo-next').click();
+  await textEquals(page, 'Third page');
+  await page.locator('#youtube-memo-title-prev').click();
+  await textEquals(page, 'Second page');
+  await page.locator('#youtube-memo-prev').click();
+  await textEquals(page, 'First page');
+});
+
+test('hides the memo completely from related videos and puts the restore button beside the masthead microphone', async (t) => {
+  const page = await createFixture(t);
+  await ready(page);
+  const before = await page.locator('#secondary').evaluate((el) => el.textContent);
+  assert.match(before, /Related videos/);
+  await page.locator('#youtube-memo-toggle').click();
+
+  const restore = page.locator('#youtube-memo-header-show');
+  await restore.waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#youtube-memo-container').count(), 0, 'memo has been fully detached');
+  assert.equal(await page.locator('#secondary').evaluate((el) => el.textContent.trim()), 'Related videos');
+  assert.equal(await restore.evaluate((el) => el.parentElement.id), 'center');
+  assert.equal(await restore.evaluate((el) => el.previousElementSibling?.id), 'voice-search-button');
+
+  await restore.click();
+  await ready(page);
+  assert.equal(await restore.count(), 0);
+  assert.equal(await page.locator('#secondary #youtube-memo-container').count(), 1);
+  assert.match(await page.locator('#secondary').evaluate((el) => el.textContent), /Related videos/);
+});
+
+test('restores the top button when the masthead is rebuilt and removes it on navigation away', async (t) => {
+  const page = await createFixture(t);
+  await ready(page);
+  await page.locator('#youtube-memo-toggle').click();
+  await page.locator('#youtube-memo-header-show').waitFor({ state: 'visible' });
+  await page.locator('#masthead #center').evaluate((center) => {
+    const replacement = document.createElement('div');
+    replacement.id = 'center';
+    replacement.innerHTML = '<span>検索</span><div id="voice-search-button"></div>';
+    center.replaceWith(replacement);
+  });
+  await page.locator('#youtube-memo-header-show').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#youtube-memo-header-show').evaluate((el) => el.parentElement.id), 'center');
+  await navigate(page, null);
+  await page.waitForFunction(() => document.getElementById('youtube-memo-header-show') === null);
+});
+
+test('dragging the splitter resizes video and memo columns and saves the width', async (t) => {
+  const page = await createFixture(t);
+  await ready(page);
+  const handle = page.locator('#youtube-memo-width-handle');
+  await handle.waitFor({ state: 'visible' });
+  const before = await page.evaluate(() => ({
+    primary: document.querySelector('#primary').getBoundingClientRect().width,
+    secondary: document.querySelector('#secondary').getBoundingClientRect().width,
+  }));
+  const box = await handle.boundingBox();
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x - 180, y, { steps: 10 });
+  await page.mouse.up();
+  await page.waitForFunction(() => Number.isFinite(window.__storage.data['memo_sidebar_width_video-a']));
+  const after = await page.evaluate(() => ({
+    primary: document.querySelector('#primary').getBoundingClientRect().width,
+    secondary: document.querySelector('#secondary').getBoundingClientRect().width,
+    saved: window.__storage.data['memo_sidebar_width_video-a'],
+  }));
+  assert.ok(after.secondary > before.secondary + 90);
+  assert.ok(after.primary < before.primary - 60);
+  assert.ok(after.saved >= after.secondary - 2);
+  assert.equal(await page.locator('#watch-video-a').evaluate((el) => el.classList.contains('youtube-memo-width-layout')), true);
+});
+
+test('remembers separate video widths and resets only the active video', async (t) => {
+  const page = await createFixture(t);
+  await ready(page);
+  const grip = page.locator('#youtube-memo-width-handle');
+  await grip.focus();
+  await grip.press('ArrowLeft');
+  await page.waitForFunction(() => Number.isFinite(window.__storage.data['memo_sidebar_width_video-a']));
+  const widthA = await page.evaluate(() => window.__storage.data['memo_sidebar_width_video-a']);
+  await navigate(page, 'video-b');
+  await ready(page, 'video-b');
+  assert.equal(await page.locator('#watch-video-b').evaluate((el) => el.classList.contains('youtube-memo-width-layout')), false);
+  await page.locator('#youtube-memo-width-handle').focus();
+  await page.locator('#youtube-memo-width-handle').press('ArrowLeft');
+  await page.locator('#youtube-memo-width-handle').press('ArrowLeft');
+  await page.waitForFunction(() => Number.isFinite(window.__storage.data['memo_sidebar_width_video-b']));
+  const widthB = await page.evaluate(() => window.__storage.data['memo_sidebar_width_video-b']);
+  assert.ok(widthB > widthA);
+
+  await navigate(page, 'video-a');
+  await ready(page);
+  await page.waitForFunction((width) =>
+    document.getElementById('watch-video-a')?.style.getPropertyValue('--youtube-memo-sidebar-width') === width + 'px', widthA);
+
+  await page.locator('#youtube-memo-settings-toggle').click();
+  await page.locator('#youtube-memo-width-reset').click();
+  await page.waitForFunction(() => Object.hasOwn(window.__storage.data, 'memo_sidebar_width_video-a') &&
+    window.__storage.data['memo_sidebar_width_video-a'] === null);
+  assert.equal(await page.locator('#watch-video-a').evaluate((el) => el.classList.contains('youtube-memo-width-layout')), false);
+  assert.equal(await page.locator('#youtube-memo-width-reset').isDisabled(), true);
+  assert.equal(await page.locator('#secondary').evaluate((el) => Math.round(el.getBoundingClientRect().width)), 360);
+
+  await navigate(page, 'video-b');
+  await ready(page, 'video-b');
+  await page.waitForFunction((width) =>
+    document.getElementById('watch-video-b')?.style.getPropertyValue('--youtube-memo-sidebar-width') === width + 'px', widthB);
+});
+
+test('temporarily disables width customization for mobile and theater without losing saved width', async (t) => {
+  const page = await createFixture(t);
+  await ready(page);
+  await page.locator('#youtube-memo-width-handle').focus();
+  await page.locator('#youtube-memo-width-handle').press('ArrowLeft');
+  await page.waitForFunction(() => Number.isFinite(window.__storage.data['memo_sidebar_width_video-a']));
+  const width = await page.evaluate(() => window.__storage.data['memo_sidebar_width_video-a']);
+  await page.setViewportSize({ width: 760, height: 1000 });
+  await page.waitForFunction(() => !document.getElementById('watch-video-a').classList.contains('youtube-memo-width-layout'));
+  assert.equal(await page.locator('#youtube-memo-width-handle').isVisible(), false);
+  await page.setViewportSize({ width: 1200, height: 1000 });
+  await page.waitForFunction((size) =>
+    document.getElementById('watch-video-a')?.style.getPropertyValue('--youtube-memo-sidebar-width') === size + 'px', width);
+  await page.locator('#watch-video-a').evaluate((el) => el.setAttribute('theater', ''));
+  await page.waitForFunction(() => !document.getElementById('watch-video-a').classList.contains('youtube-memo-width-layout'));
+  await page.locator('#watch-video-a').evaluate((el) => el.removeAttribute('theater'));
+  await page.waitForFunction((size) =>
+    document.getElementById('watch-video-a')?.style.getPropertyValue('--youtube-memo-sidebar-width') === size + 'px', width);
+});
+
+test('hiding a resized memo restores native sidebar width and showing it reapplies the saved width', async (t) => {
+  const page = await createFixture(t);
+  await ready(page);
+  await page.locator('#youtube-memo-width-handle').focus();
+  await page.locator('#youtube-memo-width-handle').press('ArrowLeft');
+  await page.waitForFunction(() => Number.isFinite(window.__storage.data['memo_sidebar_width_video-a']));
+  const saved = await page.evaluate(() => window.__storage.data['memo_sidebar_width_video-a']);
+  await page.locator('#youtube-memo-toggle').click();
+  await page.locator('#youtube-memo-header-show').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#watch-video-a').evaluate((el) => el.classList.contains('youtube-memo-width-layout')), false);
+  assert.equal(await page.locator('#secondary').evaluate((el) => Math.round(el.getBoundingClientRect().width)), 360);
+  await page.locator('#youtube-memo-header-show').click();
+  await ready(page);
+  await page.waitForFunction((size) =>
+    document.getElementById('watch-video-a')?.style.getPropertyValue('--youtube-memo-sidebar-width') === size + 'px', saved);
+  assert.equal(await page.locator('#youtube-memo-width-handle').isVisible(), true);
 });

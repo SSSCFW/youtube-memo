@@ -81,10 +81,33 @@ html[dark] #youtube-memo-container {
   min-width: 0;
 }
 
+#youtube-memo-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin-bottom: 4px;
+}
+
+#youtube-memo-title-navigation {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 4px;
+}
+
+#youtube-memo-title-navigation button {
+  padding: 3px 7px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 #youtube-memo-page-title {
   display: block;
+  flex: 1 1 0;
   width: 100%;
-  margin: 0 0 4px;
+  min-width: 0;
+  margin: 0;
   padding: 3px 2px;
   color: var(--memo-text);
   background: transparent;
@@ -180,6 +203,12 @@ html[dark] #youtube-memo-container {
   margin: 8px 0 6px;
 }
 
+#youtube-memo-width-settings {
+  border-top: 1px solid var(--memo-border);
+  padding-top: 12px;
+  margin-top: 14px;
+}
+
 #youtube-memo-page-actions {
   margin: 6px 0 16px;
 }
@@ -238,5 +267,95 @@ html[dark] #youtube-memo-status-row.youtube-memo-error {
 @media (max-width: 1024px) {
   #youtube-memo-container {
     margin-top: 16px;
+  }
+}
+
+
+/* Only active when a visible desktop watch page has two adjacent columns.
+   The memo column gets the requested width; the video receives the remainder. */
+ytd-watch-flexy.youtube-memo-width-layout,
+ytd-watch-grid.youtube-memo-width-layout {
+  --ytd-watch-flexy-sidebar-width: var(--youtube-memo-sidebar-width) !important;
+  --ytd-watch-flexy-sidebar-min-width: var(--youtube-memo-sidebar-width) !important;
+}
+
+.youtube-memo-width-layout #columns > #primary {
+  flex: 1 1 0 !important;
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: none !important;
+}
+
+.youtube-memo-width-layout #columns > #secondary {
+  box-sizing: border-box !important;
+  flex: 0 0 var(--youtube-memo-sidebar-width) !important;
+  width: var(--youtube-memo-sidebar-width) !important;
+  min-width: var(--youtube-memo-sidebar-width) !important;
+  max-width: var(--youtube-memo-sidebar-width) !important;
+}
+
+#youtube-memo-container {
+  position: relative;
+}
+
+#youtube-memo-width-handle {
+  position: absolute;
+  left: -15px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 14px;
+  height: 54px;
+  border-radius: 8px;
+  background: #555;
+  color: #fff;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  font-size: 20px;
+  line-height: 1;
+  cursor: ew-resize;
+  touch-action: none;
+  user-select: none;
+  z-index: 4;
+}
+
+#youtube-memo-width-handle:hover,
+#youtube-memo-width-handle:focus-visible {
+  background: #065fd4;
+  outline: 2px solid #3ea6ff;
+}
+
+html.youtube-memo-dragging,
+html.youtube-memo-dragging * {
+  cursor: ew-resize !important;
+  user-select: none !important;
+}
+
+/* Hidden memos leave the sidebar entirely. The restore control belongs to
+   the masthead center, immediately after YouTube's voice-search button. */
+#youtube-memo-header-show {
+  box-sizing: border-box !important;
+  display: inline-flex !important;
+  flex: 0 0 auto !important;
+  align-items: center;
+  justify-content: center;
+  margin-inline-start: 12px !important;
+  padding: 7px 13px !important;
+  border: none !important;
+  border-radius: 20px !important;
+  background: #065fd4 !important;
+  color: #fff !important;
+  font: 500 12px/1.5 Roboto, Arial, sans-serif !important;
+  white-space: nowrap !important;
+  cursor: pointer !important;
+}
+
+#youtube-memo-header-show:hover {
+  background: #0552af !important;
+}
+
+@media (max-width: 1049px) {
+  #youtube-memo-width-handle {
+    display: none !important;
   }
 }

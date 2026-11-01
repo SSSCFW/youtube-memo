@@ -28,3 +28,12 @@ test('title gap is compact and the action row does not wrap', () => {
   assert.match(title, /padding:\s*3px\s+2px\s*;/);
   assert.match(actions, /flex-wrap:\s*nowrap\s*;/);
 });
+
+
+test('title navigation and resize header controls have scoped styles', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'styles.css'), 'utf8');
+  assert.match(getRule(css, '#youtube-memo-title-row'), /display:\s*flex\s*;/);
+  assert.match(getRule(css, '#youtube-memo-title-navigation'), /display:\s*flex\s*;/);
+  assert.match(getRule(css, '#youtube-memo-width-handle'), /cursor:\s*ew-resize\s*;/);
+  assert.match(getRule(css, '#youtube-memo-header-show'), /margin-inline-start:\s*12px\s*!important\s*;/);
+});
