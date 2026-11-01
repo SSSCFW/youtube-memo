@@ -84,8 +84,8 @@ html[dark] #youtube-memo-container {
 #youtube-memo-page-title {
   display: block;
   width: 100%;
-  margin: 0 0 10px;
-  padding: 7px 2px;
+  margin: 0 0 4px;
+  padding: 3px 2px;
   color: var(--memo-text);
   background: transparent;
   border: 0;
@@ -126,8 +126,12 @@ html[dark] #youtube-memo-container {
   flex-wrap: nowrap;
   justify-content: flex-end;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   margin-top: 10px;
+}
+
+#youtube-memo-settings-toggle {
+  margin-left: auto;
 }
 
 #youtube-memo-actions button {
@@ -149,10 +153,7 @@ html[dark] #youtube-memo-container {
 }
 
 #youtube-memo-navigation {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 6px;
+  display: block;
 }
 
 #youtube-memo-page-select,
@@ -166,6 +167,7 @@ html[dark] #youtube-memo-container {
   color: var(--memo-text);
 }
 
+#youtube-memo-reorder-actions,
 #youtube-memo-page-actions,
 #youtube-memo-time-row {
   display: flex;
@@ -174,8 +176,12 @@ html[dark] #youtube-memo-container {
   align-items: center;
 }
 
+#youtube-memo-reorder-actions {
+  margin: 8px 0 6px;
+}
+
 #youtube-memo-page-actions {
-  margin: 8px 0 16px;
+  margin: 6px 0 16px;
 }
 
 #youtube-memo-start-time {

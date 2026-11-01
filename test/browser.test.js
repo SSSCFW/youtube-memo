@@ -468,3 +468,130 @@ for (const dark of [false, true]) {
     }
   });
 }
+
+
+test('shows bottom page navigation without expanding settings only when multiple pages exist', async (t) => {
+  const page = await createFixture(t, { saved: { 'memo_video-a': 'Original page' } });
+  await ready(page);
+  assert.equal(await page.locator('#youtube-memo-prev').isVisible(), false);
+  assert.equal(await page.locator('#youtube-memo-next').isVisible(), false);
+  assert.equal(await page.locator('#youtube-memo-settings-toggle').isVisible(), true);
+  assert.equal(await page.locator('#youtube-memo-toggle').isVisible(), true);
+
+  await page.locator('#youtube-memo-settings-toggle').click();
+  await page.locator('#youtube-memo-add').click();
+  await page.locator('#youtube-memo-page-title').fill('Another page');
+  await page.locator('#youtube-memo-textarea').fill('Second page');
+  await page.locator('#youtube-memo-settings-toggle').click();
+
+  assert.equal(await page.locator('#youtube-memo-settings').isVisible(), false);
+  assert.equal(await page.locator('#youtube-memo-prev').isVisible(), true);
+  assert.equal(await page.locator('#youtube-memo-next').isVisible(), true);
+  const order = await page.locator('#youtube-memo-actions > button').evaluateAll((buttons) => buttons.map((button) => button.id));
+  assert.deepEqual(order, [
+    'youtube-memo-prev', 'youtube-memo-next', 'youtube-memo-settings-toggle', 'youtube-memo-toggle',
+  ]);
+  assert.equal(await page.locator('#youtube-memo-prev').textContent(), '戻る');
+  assert.equal(await page.locator('#youtube-memo-next').textContent(), '前へ');
+
+  const positions = await page.locator('#youtube-memo-actions > button').evaluateAll((buttons) =>
+    buttons.map((button) => button.getBoundingClientRect().toJSON()));
+  assert.ok(positions.every((rect) => Math.abs(rect.top - positions[0].top) <= 2), 'four controls are on one row');
+  assert.ok(positions.every((rect, i) => i === 0 || positions[i - 1].right <= rect.left), 'controls follow requested order');
+
+  assert.equal(await page.locator('#youtube-memo-next').isDisabled(), true);
+  await page.locator('#youtube-memo-prev').click();
+  await textEquals(page, 'Original page');
+  assert.equal(await page.locator('#youtube-memo-prev').isDisabled(), true);
+  await page.locator('#youtube-memo-next').click();
+  await textEquals(page, 'Second page');
+
+  await page.locator('#youtube-memo-toggle').click();
+  assert.equal(await page.locator('#youtube-memo-area').isVisible(), false);
+  assert.equal(await page.locator('#youtube-memo-prev').isVisible(), true);
+  await page.locator('#youtube-memo-toggle').click();
+  await textEquals(page, 'Second page');
+});
+
+test('moves the active page up and down without losing its text, title, cue, or selection', async (t) => {
+  const page = await createFixture(t, {
+    saved: { 'memo_pages_video-a': record({ activePageId: 'two' }) },
+  });
+  await ready(page);
+  await page.locator('#youtube-memo-settings-toggle').click();
+  assert.equal(await page.locator('#youtube-memo-move-up').isDisabled(), false);
+  assert.equal(await page.locator('#youtube-memo-move-down').isDisabled(), false);
+  await page.locator('#youtube-memo-move-down').click();
+
+  const optionOrder = async () => page.locator('#youtube-memo-page-select option').evaluateAll(
+    (options) => options.map((option) => option.value)
+  );
+  assert.deepEqual(await optionOrder(), ['one', 'three', 'two', 'manual']);
+  assert.equal(await page.locator('#youtube-memo-page-select').inputValue(), 'two');
+  await textEquals(page, 'Second page');
+  assert.equal(await page.locator('#youtube-memo-page-title').inputValue(), 'Middle');
+  assert.equal(await page.locator('#youtube-memo-start-time').inputValue(), '0:30');
+
+  let saved = await savedRecord(page, 'video-a',
+    (key) => window.__storage.data[key]?.pages?.[2]?.id === 'two');
+  assert.deepEqual(saved.pages.map((entry) => entry.id), ['one', 'three', 'two', 'manual']);
+  assert.equal(saved.activePageId, 'two');
+  assert.deepEqual(saved.pages[2], { id: 'two', title: 'Middle', content: 'Second page', startTime: 30 });
+
+  await page.locator('#youtube-memo-move-up').click();
+  await page.locator('#youtube-memo-move-up').click();
+  assert.deepEqual(await optionOrder(), ['two', 'one', 'three', 'manual']);
+  assert.equal(await page.locator('#youtube-memo-move-up').isDisabled(), true);
+  assert.equal(await page.locator('#youtube-memo-move-down').isDisabled(), false);
+  await page.locator('#youtube-memo-next').click();
+  await textEquals(page, 'First page');
+  saved = await savedRecord(page, 'video-a',
+    (key) => window.__storage.data[key]?.pages?.[0]?.id === 'two');
+  assert.equal(saved.pages[0].content, 'Second page');
+});
+
+test('reordering pages changes the tie-breaker for equal playback cues while leaving times untouched', async (t) => {
+  const page = await createFixture(t, {
+    saved: { 'memo_pages_video-a': record({
+      activePageId: 'one',
+      autoSwitch: true,
+      pages: [
+        { id: 'one', title: 'Intro', content: 'Intro text', startTime: 0 },
+        { id: 'two', title: 'A', content: 'A text', startTime: 30 },
+        { id: 'three', title: 'B', content: 'B text', startTime: 30 },
+      ],
+    }) },
+  });
+  await ready(page);
+  await page.locator('#youtube-memo-settings-toggle').click();
+  await page.locator('#youtube-memo-page-select').selectOption('three');
+  await page.locator('#youtube-memo-move-up').click();
+  assert.deepEqual(await page.locator('#youtube-memo-page-select option').evaluateAll(
+    (options) => options.map((option) => option.value)), ['one', 'three', 'two']);
+  await setTime(page, 30);
+  await textEquals(page, 'A text');
+  await setTime(page, 0);
+  await textEquals(page, 'Intro text');
+  const saved = await savedRecord(page, 'video-a',
+    (key) => window.__storage.data[key]?.pages?.[1]?.id === 'three');
+  assert.deepEqual(saved.pages.map((entry) => entry.startTime), [0, 30, 30]);
+});
+
+test('reduces the visible page title spacing above the editor', async (t) => {
+  const page = await createFixture(t, { saved: { 'memo_pages_video-a': record() } });
+  await ready(page);
+  const metrics = await page.locator('#youtube-memo-page-title').evaluate((title) => {
+    const style = getComputedStyle(title);
+    const textarea = document.getElementById('youtube-memo-textarea');
+    return {
+      marginBottom: style.marginBottom,
+      paddingTop: style.paddingTop,
+      paddingBottom: style.paddingBottom,
+      gap: textarea.getBoundingClientRect().top - title.getBoundingClientRect().bottom,
+    };
+  });
+  assert.equal(metrics.marginBottom, '4px');
+  assert.equal(metrics.paddingTop, '3px');
+  assert.equal(metrics.paddingBottom, '3px');
+  assert.ok(metrics.gap <= 5, 'title and memo should have a small gap');
+});
