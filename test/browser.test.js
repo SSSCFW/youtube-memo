@@ -699,6 +699,17 @@ test('remembers separate video widths and resets only the active video', async (
   const grip = page.locator('#youtube-memo-width-handle');
   await grip.focus();
   await grip.press('ArrowLeft');
+  console.log('DEBUG MEMO WIDTH', JSON.stringify(await page.evaluate(() => ({
+    active: document.activeElement?.id,
+    aria: document.getElementById('youtube-memo-width-handle')?.getAttribute('aria-valuenow'),
+    isHidden: document.getElementById('youtube-memo-width-handle')?.hidden,
+    rootClass: document.getElementById('watch-video-a')?.className,
+    rootStyle: document.getElementById('watch-video-a')?.style.getPropertyValue('--youtube-memo-sidebar-width'),
+    secondaryWidth: document.getElementById('secondary')?.getBoundingClientRect().width,
+    data: window.__storage.data['memo_sidebar_width_video-a'],
+    pending: window.__storage.writes,
+    error: document.getElementById('youtube-memo-status')?.textContent,
+  }))));
   await page.waitForFunction(() => Number.isFinite(window.__storage.data['memo_sidebar_width_video-a']));
   const widthA = await page.evaluate(() => window.__storage.data['memo_sidebar_width_video-a']);
   await navigate(page, 'video-b');
