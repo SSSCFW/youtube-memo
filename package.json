@@ -3,7 +3,7 @@
   "version": "1.3.0",
   "private": true,
   "scripts": {
-    "test": "node --test --test-isolation=none test/*.test.js"
+    "test": "node --test --experimental-test-isolation=none test/*.test.js"
   },
   "engines": {
     "node": ">=22.7.0"
