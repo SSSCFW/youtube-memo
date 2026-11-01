@@ -583,15 +583,18 @@ test('reduces the visible page title spacing above the editor', async (t) => {
   await ready(page);
   const metrics = await page.locator('#youtube-memo-page-title').evaluate((title) => {
     const style = getComputedStyle(title);
+    const row = document.getElementById('youtube-memo-title-row');
     const textarea = document.getElementById('youtube-memo-textarea');
     return {
-      marginBottom: style.marginBottom,
+      titleMarginBottom: style.marginBottom,
+      rowMarginBottom: getComputedStyle(row).marginBottom,
       paddingTop: style.paddingTop,
       paddingBottom: style.paddingBottom,
-      gap: textarea.getBoundingClientRect().top - title.getBoundingClientRect().bottom,
+      gap: textarea.getBoundingClientRect().top - row.getBoundingClientRect().bottom,
     };
   });
-  assert.equal(metrics.marginBottom, '4px');
+  assert.equal(metrics.titleMarginBottom, '0px');
+  assert.equal(metrics.rowMarginBottom, '4px');
   assert.equal(metrics.paddingTop, '3px');
   assert.equal(metrics.paddingBottom, '3px');
   assert.ok(metrics.gap <= 5, 'title and memo should have a small gap');
