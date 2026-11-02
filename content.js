@@ -562,6 +562,9 @@
       if (signature === this.lastSplitFit) return;
       this.lastSplitFit = signature;
       preview.style.height = height + 'px';
+      // Measure with sequential column filling to detect true overflow, then
+      // balance the winning columns so shorter notes also display side by side.
+      preview.style.columnFill = 'auto';
 
       let chosen = null;
       // Prefer full-size text and additional columns before shrinking text.
@@ -581,6 +584,15 @@
         chosen = { columns: choices[choices.length - 1], size: 11, fits: false };
         preview.style.fontSize = '11px';
         preview.style.columnCount = String(chosen.columns);
+      }
+      if (chosen.fits) {
+        preview.style.columnFill = 'balance';
+        // Some browsers choose taller balanced columns for unusual content.
+        // Retain the fully-fitting sequential layout in that case.
+        if (preview.scrollWidth > preview.clientWidth + 2 ||
+            preview.scrollHeight > preview.clientHeight + 2) {
+          preview.style.columnFill = 'auto';
+        }
       }
       preview.dataset.columns = String(chosen.columns);
       preview.dataset.fits = String(chosen.fits);
