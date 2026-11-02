@@ -710,7 +710,9 @@ test('remembers separate video widths and resets only the active video', async (
   await page.locator('#youtube-memo-width-handle').focus();
   await page.locator('#youtube-memo-width-handle').press('ArrowLeft');
   await page.locator('#youtube-memo-width-handle').press('ArrowLeft');
-  await page.waitForFunction(() => Number.isFinite(window.__storage.data['memo_sidebar_width_video-b']));
+  // Wait for both queued keyboard writes, not merely the first saved width.
+  await page.waitForFunction((width) =>
+    window.__storage.data['memo_sidebar_width_video-b'] > width, widthA);
   const widthB = await page.evaluate(() => window.__storage.data['memo_sidebar_width_video-b']);
   assert.ok(widthB > widthA);
 
@@ -771,4 +773,222 @@ test('hiding a resized memo restores native sidebar width and showing it reappli
   await page.waitForFunction((size) =>
     document.getElementById('watch-video-a')?.style.getPropertyValue('--youtube-memo-sidebar-width') === size + 'px', saved);
   assert.equal(await page.locator('#youtube-memo-width-handle').isVisible(), true);
+});
+
+
+test('normal display is the default and split settings are opt-in for each page', async (t) => {
+  const page = await createFixture(t, { saved: { 'memo_video-a': 'Legacy content\nSecond line' } });
+  await ready(page);
+  assert.equal(await page.locator('#youtube-memo-textarea').isVisible(), true);
+  assert.equal(await page.locator('#youtube-memo-split-toolbar').isVisible(), false);
+  assert.equal(await page.locator('#youtube-memo-split-preview').isVisible(), false);
+  await page.locator('#youtube-memo-settings-toggle').click();
+  assert.equal(await page.locator('#youtube-memo-split-toggle').isChecked(), false);
+  assert.equal(await page.locator('#youtube-memo-split-columns').isDisabled(), true);
+  await page.locator('#youtube-memo-split-toggle').check();
+  await page.locator('#youtube-memo-split-preview').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#youtube-memo-textarea').isVisible(), false);
+  assert.equal(await page.locator('#youtube-memo-split-columns').isEnabled(), true);
+  assert.equal(await page.locator('#youtube-memo-split-preview').textContent(), 'Legacy content\nSecond line');
+  const saved = await savedRecord(page, 'video-a', (key) =>
+    window.__storage.data[key]?.pages?.[0]?.splitView === true);
+  assert.equal(saved.pages[0].content, 'Legacy content\nSecond line');
+  assert.equal(saved.pages[0].startTime, 0);
+});
+
+test('split display and requested column count follow their own pages and survive SPA navigation', async (t) => {
+  const original = record({ pages: [
+    { id: 'one', title: 'A', content: 'First', startTime: 0 },
+    { id: 'two', title: 'B', content: 'Second\nline', startTime: 30, splitView: true, splitColumns: 3 },
+  ] });
+  const page = await createFixture(t, { saved: { 'memo_pages_video-a': original } });
+  await ready(page);
+  await page.locator('#youtube-memo-settings-toggle').click();
+  assert.equal(await page.locator('#youtube-memo-split-toggle').isChecked(), false);
+  await page.locator('#youtube-memo-next').click();
+  assert.equal(await page.locator('#youtube-memo-split-toggle').isChecked(), true);
+  assert.equal(await page.locator('#youtube-memo-split-columns').inputValue(), '3');
+  await page.locator('#youtube-memo-split-preview').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#youtube-memo-split-preview').textContent(), 'Second\nline');
+  await page.locator('#youtube-memo-split-columns').selectOption('4');
+  await savedRecord(page, 'video-a', (key) => window.__storage.data[key]?.pages?.[1]?.splitColumns === 4);
+  await navigate(page, 'video-b');
+  await ready(page, 'video-b');
+  await page.locator('#youtube-memo-settings-toggle').click();
+  assert.equal(await page.locator('#youtube-memo-split-toggle').isChecked(), false);
+  await navigate(page, 'video-a');
+  await ready(page, 'video-a');
+  await page.locator('#youtube-memo-settings-toggle').click();
+  assert.equal(await page.locator('#youtube-memo-split-toggle').isChecked(), true);
+  assert.equal(await page.locator('#youtube-memo-split-columns').inputValue(), '4');
+  await page.locator('#youtube-memo-prev').click();
+  assert.equal(await page.locator('#youtube-memo-split-toggle').isChecked(), false);
+  assert.equal(await page.locator('#youtube-memo-textarea').isVisible(), true);
+});
+
+test('split display preserves Japanese newlines and literal HTML without executing markup', async (t) => {
+  const input = '歌詞の1行目\n\n歌詞の3行目\n<svg/onload=alert(1)>\n最後の行';
+  const page = await createFixture(t, { saved: {
+    'memo_pages_video-a': record({ pages: [{ id: 'one', title: '', content: input, startTime: 0, splitView: true }] }),
+  } });
+  await ready(page);
+  await page.locator('#youtube-memo-split-preview').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#youtube-memo-split-preview').textContent(), input);
+  assert.equal(await page.locator('#youtube-memo-split-preview svg').count(), 0);
+  assert.equal(await page.locator('#youtube-memo-split-preview').evaluate((el) => getComputedStyle(el).whiteSpace), 'pre-wrap');
+});
+
+test('auto-fit split keeps a reasonably sized memo within the viewport without internal scrolling', async (t) => {
+  const content = Array.from({ length: 36 }, (_, i) => '行 ' + (i + 1)).join('\n');
+  const page = await createFixture(t, {
+    saved: { 'memo_pages_video-a': record({ pages: [
+      { id: 'one', title: '歌詞', content, startTime: 0, splitView: true },
+    ] }) },
+  });
+  await ready(page);
+  await page.locator('#youtube-memo-split-preview').waitFor({ state: 'visible' });
+  await page.waitForFunction(() => document.getElementById('youtube-memo-split-preview')?.dataset.fits === 'true');
+  const data = await page.locator('#youtube-memo-split-preview').evaluate((el) => ({
+    columns: Number(el.dataset.columns),
+    fits: el.dataset.fits,
+    width: el.clientWidth, scrollWidth: el.scrollWidth,
+    height: el.clientHeight, scrollHeight: el.scrollHeight,
+    bottom: el.getBoundingClientRect().bottom, viewportHeight: innerHeight,
+    text: el.textContent,
+    fill: getComputedStyle(el).columnFill,
+    lineXs: (() => {
+      const selection = document.createRange();
+      selection.selectNodeContents(el);
+      return [...selection.getClientRects()].filter((rect) => rect.width > 0)
+        .map((rect) => Math.round(rect.x));
+    })(),
+  }));
+  assert.equal(data.text, content);
+  assert.equal(data.fits, 'true');
+  assert.ok(data.columns >= 2, 'two or more side-by-side text columns');
+  assert.ok(data.scrollWidth <= data.width + 2, 'no horizontal scrollbar is required');
+  assert.ok(data.scrollHeight <= data.height + 2, 'no vertical scrollbar is required');
+  assert.ok(data.bottom < data.viewportHeight - 16, 'memo fits within one screen');
+  assert.equal(data.fill, 'balance', 'shorter notes are evenly split among columns');
+  assert.ok(Math.max(...data.lineXs) - Math.min(...data.lineXs) > 80,
+    'the text visibly spans at least two side-by-side columns');
+});
+
+test('overflowing split preview never loses content and explains horizontal scrolling', async (t) => {
+  const content = Array.from({ length: 320 }, (_, i) => '長い文章の行 ' + i).join('\n');
+  const page = await createFixture(t, {
+    saved: { 'memo_pages_video-a': record({ pages: [
+      { id: 'one', title: '', content, startTime: 0, splitView: true },
+    ] }) },
+  });
+  await ready(page);
+  await page.waitForFunction(() => document.getElementById('youtube-memo-split-preview')?.dataset.fits === 'false');
+  assert.equal(await page.locator('#youtube-memo-split-preview').textContent(), content);
+  const metrics = await page.locator('#youtube-memo-split-preview').evaluate((el) => ({
+    client: el.clientWidth, scroll: el.scrollWidth, overflowX: getComputedStyle(el).overflowX,
+  }));
+  assert.ok(metrics.scroll > metrics.client + 2, 'all overflowing columns remain accessible');
+  assert.equal(metrics.overflowX, 'auto');
+  assert.match(await page.locator('#youtube-memo-split-notice').textContent(), /横スクロール/);
+});
+
+test('split edit button switches to editable text and back without losing per-page settings', async (t) => {
+  const page = await createFixture(t, {
+    saved: { 'memo_pages_video-a': record({ pages: [
+      { id: 'one', title: 'A', content: 'Before', startTime: 0, splitView: true, splitColumns: 2 },
+      { id: 'two', title: 'B', content: 'Normal', startTime: 30 },
+    ] }) },
+  });
+  await ready(page);
+  await page.locator('#youtube-memo-split-preview').waitFor({ state: 'visible' });
+  await page.locator('#youtube-memo-split-edit').click();
+  assert.equal(await page.locator('#youtube-memo-textarea').isVisible(), true);
+  assert.equal(await page.locator('#youtube-memo-split-preview').isVisible(), false);
+  await page.locator('#youtube-memo-textarea').fill('After edit\nTwo lines');
+  await savedRecord(page, 'video-a', (key) =>
+    window.__storage.data[key]?.pages?.[0]?.content === 'After edit\nTwo lines');
+  await page.locator('#youtube-memo-split-edit').click();
+  await page.locator('#youtube-memo-split-preview').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#youtube-memo-split-preview').textContent(), 'After edit\nTwo lines');
+  await page.locator('#youtube-memo-next').click();
+  assert.equal(await page.locator('#youtube-memo-textarea').isVisible(), true);
+  assert.equal(await page.locator('#youtube-memo-split-preview').isVisible(), false);
+  await page.locator('#youtube-memo-prev').click();
+  await page.locator('#youtube-memo-split-preview').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#youtube-memo-split-preview').textContent(), 'After edit\nTwo lines');
+});
+
+test('disabling split returns to the normal editor and preserves text and timing', async (t) => {
+  const page = await createFixture(t, { saved: { 'memo_pages_video-a': record({ pages: [
+    { id: 'one', title: 'Intro', content: 'Original', startTime: 9, splitView: true, splitColumns: 3 },
+  ] }) } });
+  await ready(page);
+  await page.locator('#youtube-memo-settings-toggle').click();
+  await page.locator('#youtube-memo-split-toggle').uncheck();
+  assert.equal(await page.locator('#youtube-memo-split-preview').isVisible(), false);
+  assert.equal(await page.locator('#youtube-memo-split-toolbar').isVisible(), false);
+  assert.equal(await page.locator('#youtube-memo-textarea').isVisible(), true);
+  assert.equal(await page.locator('#youtube-memo-textarea').inputValue(), 'Original');
+  const saved = await savedRecord(page, 'video-a', (key) =>
+    window.__storage.data[key]?.pages?.[0]?.splitView === undefined);
+  assert.equal(saved.pages[0].splitColumns, 3);
+  assert.equal(saved.pages[0].startTime, 9);
+  assert.equal(saved.pages[0].content, 'Original');
+});
+
+test('auto-switching still restores page-specific split display on forward and backward seeks', async (t) => {
+  const page = await createFixture(t, {
+    saved: { 'memo_pages_video-a': record({
+      autoSwitch: true, pages: [
+        { id: 'one', title: 'Intro', content: 'Split intro', startTime: 0, splitView: true },
+        { id: 'two', title: 'Main', content: 'Normal body', startTime: 30 },
+      ],
+    }) },
+  });
+  await ready(page);
+  await page.locator('#youtube-memo-split-preview').waitFor({ state: 'visible' });
+  await setTime(page, 40);
+  await textEquals(page, 'Normal body');
+  assert.equal(await page.locator('#youtube-memo-textarea').isVisible(), true);
+  await setTime(page, 0);
+  await page.locator('#youtube-memo-split-preview').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#youtube-memo-split-preview').textContent(), 'Split intro');
+});
+
+test('split preview adjusts its available height after resizing the viewport', async (t) => {
+  const content = Array.from({ length: 20 }, (_, i) => '短いメモ '+i).join('\n');
+  const page = await createFixture(t, { saved: {
+    'memo_pages_video-a': record({ pages: [
+      { id: 'one', title: '', content, startTime: 0, splitView: true },
+    ] }),
+  } });
+  await ready(page);
+  await page.waitForFunction(() => document.getElementById('youtube-memo-split-preview')?.dataset.fits);
+  const heightBefore = await page.locator('#youtube-memo-split-preview').evaluate((el) => el.clientHeight);
+  await page.setViewportSize({ width: 1200, height: 700 });
+  await page.waitForFunction((before) => {
+    const el = document.getElementById('youtube-memo-split-preview');
+    return el && el.clientHeight < before - 100;
+  }, heightBefore);
+  const heightAfter = await page.locator('#youtube-memo-split-preview').evaluate((el) => el.clientHeight);
+  assert.ok(heightAfter < heightBefore);
+});
+
+test('page reordering keeps each page split preferences with its content', async (t) => {
+  const page = await createFixture(t, {
+    saved: { 'memo_pages_video-a': record({ activePageId: 'two', pages: [
+      { id: 'one', title: 'One', content: 'Default', startTime: 0 },
+      { id: 'two', title: 'Two', content: 'Columns', startTime: 20, splitView: true, splitColumns: 5 },
+      { id: 'three', title: 'Three', content: 'Other', startTime: 40 },
+    ] }) },
+  });
+  await ready(page);
+  await page.locator('#youtube-memo-settings-toggle').click();
+  await page.locator('#youtube-memo-move-up').click();
+  const saved = await savedRecord(page, 'video-a', (key) =>
+    window.__storage.data[key]?.pages?.[0]?.id === 'two');
+  assert.equal(saved.pages[0].splitView, true);
+  assert.equal(saved.pages[0].splitColumns, 5);
+  assert.equal(saved.pages[0].content, 'Columns');
+  assert.equal(saved.pages[1].splitView, undefined);
 });

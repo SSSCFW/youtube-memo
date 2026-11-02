@@ -148,6 +148,9 @@
       this.widthLayout = null;
       this.widthDrag = null;
       this.currentLayout = null;
+      this.splitEditing = false;
+      this.splitFitTimer = null;
+      this.lastSplitFit = '';
       this.build();
       this.onPlayback = () => this.syncPlayback();
     }
@@ -180,7 +183,26 @@
       this.titleNav.append(this.titlePrevious, this.titleNext);
       this.titleRow.append(this.title, this.titleNav);
       this.titleRow.hidden = true;
-      this.area.append(this.titleRow, this.textarea);
+      // The split view is read-only so newlines and other note text stay intact.
+      // Editing continues to use the existing, unchanged textarea and storage.
+      this.splitToolbar = makeElement('div', 'youtube-memo-split-toolbar');
+      this.splitToolbar.hidden = true;
+      this.splitModeLabel = makeElement('span', 'youtube-memo-split-mode-label', '横分割表示');
+      this.splitNotice = makeElement('span', 'youtube-memo-split-notice');
+      this.splitNotice.setAttribute('role', 'status');
+      this.splitEditButton = makeButton('youtube-memo-split-edit', 'メモを編集', () => {
+        if (!this.canEdit()) return;
+        this.splitEditing = !this.splitEditing;
+        this.renderSplitView();
+        if (this.splitEditing) this.textarea.focus();
+      });
+      this.splitToolbar.append(this.splitModeLabel, this.splitEditButton, this.splitNotice);
+      this.splitPreview = makeElement('div', 'youtube-memo-split-preview');
+      this.splitPreview.hidden = true;
+      this.splitPreview.tabIndex = 0;
+      this.splitPreview.setAttribute('role', 'region');
+      this.splitPreview.setAttribute('aria-label', '横分割されたメモ本文');
+      this.area.append(this.titleRow, this.splitToolbar, this.splitPreview, this.textarea);
 
       // The drag grip lives on the memo's left edge, adjoining the video.
       this.widthHandle = makeElement('div', 'youtube-memo-width-handle', '⋮');
@@ -257,10 +279,26 @@
       this.autoSwitch = makeElement('input', 'youtube-memo-auto-switch');
       this.autoSwitch.type = 'checkbox';
       autoLabel.append(this.autoSwitch, document.createTextNode('再生時間で自動切り替え（この動画）'));
+      const splitGroup = makeElement('div', 'youtube-memo-display-settings');
+      const splitLabel = makeElement('label', 'youtube-memo-split-label');
+      this.splitToggle = makeElement('input', 'youtube-memo-split-toggle');
+      this.splitToggle.type = 'checkbox';
+      splitLabel.append(this.splitToggle, document.createTextNode('このページを横分割表示'));
+      const columnLabel = makeElement('label', 'youtube-memo-split-columns-label', '列数');
+      columnLabel.htmlFor = 'youtube-memo-split-columns';
+      this.splitColumns = makeElement('select', 'youtube-memo-split-columns');
+      for (const value of ['auto', '2', '3', '4', '5', '6']) {
+        const option = makeElement('option', null, value === 'auto' ? '自動（画面内に収める）' : value + '列');
+        option.value = value;
+        this.splitColumns.append(option);
+      }
+      const splitHelp = makeElement('p', 'youtube-memo-split-help',
+        'ページごとに保存します。横分割中は閲覧用です。「メモを編集」で本文を変更できます。');
+      splitGroup.append(splitLabel, columnLabel, this.splitColumns, splitHelp);
       const widthRow = makeElement('div', 'youtube-memo-width-settings');
       this.widthReset = makeButton('youtube-memo-width-reset', '横幅をリセット', () => this.resetWidth());
       widthRow.append(this.widthReset);
-      this.settings.append(pageLabel, navigation, reorder, editing, timeLabel, timeRow, help, autoLabel, widthRow);
+      this.settings.append(pageLabel, navigation, reorder, editing, splitGroup, timeLabel, timeRow, help, autoLabel, widthRow);
 
       this.statusRow = makeElement('div', 'youtube-memo-status-row');
       this.status = makeElement('span', 'youtube-memo-status');
@@ -290,6 +328,25 @@
         this.persist();
       });
       this.select.addEventListener('change', () => this.selectPage(this.select.value, true));
+      this.splitToggle.addEventListener('change', () => {
+        if (!this.canEdit()) return;
+        if (this.splitToggle.checked) this.activePage().splitView = true;
+        else delete this.activePage().splitView;
+        this.splitEditing = false;
+        this.renderSplitView();
+        this.persist();
+      });
+      this.splitColumns.addEventListener('change', () => {
+        if (!this.canEdit()) return;
+        if (this.splitColumns.value === 'auto') delete this.activePage().splitColumns;
+        else {
+          const columns = Number(this.splitColumns.value);
+          if (!Number.isInteger(columns) || columns < 2 || columns > 6) return;
+          this.activePage().splitColumns = columns;
+        }
+        this.renderSplitView();
+        this.persist();
+      });
       this.autoSwitch.addEventListener('change', () => {
         if (!this.canEdit()) return;
         this.memo.autoSwitch = this.autoSwitch.checked;
@@ -319,6 +376,10 @@
         this.resizeTimer = setTimeout(() => this.saveHeight(), 300);
       });
       this.resizeObserver.observe(this.textarea);
+      this.splitResizeObserver = new ResizeObserver(() => {
+        if (this.loaded && !this.splitPreview.hidden && !this.hidden) this.scheduleSplitFit();
+      });
+      this.splitResizeObserver.observe(this.container);
       this.renderEnabled();
       this.renderVisibility();
       this.renderStatus();
@@ -416,6 +477,11 @@
       this.startTime.removeAttribute('aria-invalid');
       this.startTime.setCustomValidity('');
       this.autoSwitch.checked = this.memo.autoSwitch;
+      this.splitEditing = false;
+      this.splitToggle.checked = page.splitView === true;
+      this.splitColumns.value = Number.isInteger(page.splitColumns) &&
+        page.splitColumns >= 2 && page.splitColumns <= 6 ? String(page.splitColumns) : 'auto';
+      this.renderSplitView();
       this.renderOptions();
       this.renderEnabled();
       this.renderStatus();
@@ -438,6 +504,102 @@
       this.remove.disabled = !hasMultiplePages;
       this.setTime.disabled = !this.loaded || !this.video;
       this.widthReset.disabled = !this.loaded || this.sidebarWidth === null;
+      this.splitToggle.disabled = !this.loaded;
+      this.splitColumns.disabled = !this.loaded || !this.splitToggle.checked;
+      this.splitEditButton.disabled = !this.loaded;
+    }
+
+    renderSplitView() {
+      const enabled = this.loaded && this.activePage().splitView === true;
+      const reading = enabled && !this.splitEditing;
+      this.splitToolbar.hidden = !enabled;
+      this.splitPreview.hidden = !reading;
+      this.textarea.hidden = reading;
+      this.splitEditButton.textContent = this.splitEditing ? '分割表示に戻る' : 'メモを編集';
+      this.splitNotice.textContent = '';
+      if (reading) {
+        // Text-only rendering is deliberate: notes must not be interpreted as HTML.
+        this.splitPreview.textContent = this.activePage().content;
+        this.splitPreview.scrollLeft = 0;
+        this.lastSplitFit = '';
+        this.scheduleSplitFit();
+      } else {
+        clearTimeout(this.splitFitTimer);
+        this.splitFitTimer = null;
+      }
+      this.renderEnabled();
+    }
+
+    scheduleSplitFit() {
+      if (this.splitFitTimer !== null || this.disposed) return;
+      this.splitFitTimer = setTimeout(() => {
+        this.splitFitTimer = null;
+        this.fitSplitPreview();
+      }, 60);
+    }
+
+    fitSplitPreview() {
+      if (!this.isCurrent() || !this.loaded || this.hidden || this.splitPreview.hidden ||
+          !this.splitPreview.isConnected) return;
+      const preview = this.splitPreview;
+      const width = preview.clientWidth;
+      if (width < 100) return;
+
+      const top = preview.getBoundingClientRect().top;
+      const bottomReserve = Math.max(52,
+        this.container.getBoundingClientRect().bottom - preview.getBoundingClientRect().bottom);
+      const height = Math.max(160, Math.min(900,
+        Math.floor(window.innerHeight - top - bottomReserve - 12)));
+      const requested = this.activePage().splitColumns;
+      const maxColumns = Math.max(1, Math.min(6, Math.floor((width - 20 + 14) / (130 + 14))));
+      const choices = Number.isInteger(requested)
+        ? [Math.max(1, Math.min(maxColumns, requested))]
+        : Array.from({ length: Math.max(0, maxColumns - 1) }, (_, i) => i + 2);
+      // Very narrow columns cannot display text legibly, so fall back to one.
+      if (choices.length === 0) choices.push(1);
+      const signature = [this.memo.activePageId, width, Math.round(top), height,
+        requested || 'auto', this.activePage().content.length, this.detailsOpen].join(':');
+      if (signature === this.lastSplitFit) return;
+      this.lastSplitFit = signature;
+      preview.style.height = height + 'px';
+      // Measure with sequential column filling to detect true overflow, then
+      // balance the winning columns so shorter notes also display side by side.
+      preview.style.columnFill = 'auto';
+
+      let chosen = null;
+      // Prefer full-size text and additional columns before shrinking text.
+      for (const size of [14, 13, 12, 11]) {
+        for (const columns of choices) {
+          preview.style.fontSize = size + 'px';
+          preview.style.columnCount = String(columns);
+          if (preview.scrollWidth <= preview.clientWidth + 2 &&
+              preview.scrollHeight <= preview.clientHeight + 2) {
+            chosen = { columns, size, fits: true };
+            break;
+          }
+        }
+        if (chosen) break;
+      }
+      if (!chosen) {
+        chosen = { columns: choices[choices.length - 1], size: 11, fits: false };
+        preview.style.fontSize = '11px';
+        preview.style.columnCount = String(chosen.columns);
+      }
+      if (chosen.fits) {
+        preview.style.columnFill = 'balance';
+        // Some browsers choose taller balanced columns for unusual content.
+        // Retain the fully-fitting sequential layout in that case.
+        if (preview.scrollWidth > preview.clientWidth + 2 ||
+            preview.scrollHeight > preview.clientHeight + 2) {
+          preview.style.columnFill = 'auto';
+        }
+      }
+      preview.dataset.columns = String(chosen.columns);
+      preview.dataset.fits = String(chosen.fits);
+      preview.style.overflowX = chosen.fits ? 'hidden' : 'auto';
+      this.splitModeLabel.textContent = '横分割表示・' + chosen.columns + '列';
+      this.splitNotice.textContent = chosen.fits ? '' :
+        '一画面に収まらないため横スクロールできます。メモの横幅を広げると改善します。';
     }
 
     renderVisibility() {
@@ -448,6 +610,8 @@
       this.toggle.setAttribute('aria-expanded', String(!this.hidden));
       this.settings.hidden = !this.detailsOpen;
       this.settingsToggle.setAttribute('aria-expanded', String(this.detailsOpen));
+      this.lastSplitFit = '';
+      if (!this.hidden && !this.splitPreview.hidden) this.scheduleSplitFit();
       if (this.hidden) {
         clearTimeout(this.resizeTimer);
         this.stopWidthDrag(true);
@@ -502,6 +666,7 @@
       this.widthHandle.setAttribute('aria-valuenow', String(effective));
       this.widthHandle.setAttribute('aria-valuemin', String(MIN_MEMO_WIDTH));
       this.widthHandle.setAttribute('aria-valuemax', String(next.maxWidth));
+      if (!this.splitPreview.hidden) this.scheduleSplitFit();
     }
 
     saveWidth(value) {
@@ -715,7 +880,9 @@
       this.disposed = true;
       clearTimeout(this.resizeTimer);
       clearTimeout(this.focusTimer);
+      clearTimeout(this.splitFitTimer);
       this.resizeObserver.disconnect();
+      this.splitResizeObserver.disconnect();
       this.bindVideo(null);
       this.container.remove();
     }
@@ -759,6 +926,7 @@
     }
     current.bindVideo(layout.root);
     current.applyWidthLayout(layout);
+    if (current.loaded && !current.splitPreview.hidden) current.scheduleSplitFit();
     current.syncPlayback();
   }
 

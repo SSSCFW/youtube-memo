@@ -359,3 +359,108 @@ html.youtube-memo-dragging * {
     display: none !important;
   }
 }
+
+
+/* Page-specific side-by-side memo display. The browser flows ordinary text
+   across columns from top to bottom, without interpreting memo HTML. */
+#youtube-memo-split-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin: 7px 0 6px;
+  min-width: 0;
+}
+
+#youtube-memo-split-mode-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--memo-muted);
+}
+
+#youtube-memo-split-toolbar #youtube-memo-split-edit {
+  padding: 3px 9px;
+  font-size: 12px;
+}
+
+#youtube-memo-split-notice {
+  flex: 1 1 100%;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--memo-muted);
+}
+
+#youtube-memo-split-notice:empty {
+  display: none;
+}
+
+#youtube-memo-split-preview {
+  box-sizing: border-box;
+  width: 100%;
+  height: 280px;
+  min-height: 160px;
+  padding: 10px 12px;
+  border: 1px solid var(--memo-border);
+  border-radius: 8px;
+  color: var(--memo-text);
+  background: var(--memo-input);
+  font: 14px/1.45 "Roboto Mono", monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  column-count: 2;
+  column-gap: 14px;
+  column-rule: 1px solid var(--memo-border);
+  column-fill: auto;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+
+#youtube-memo-split-preview:focus-visible {
+  outline: 2px solid #3ea6ff;
+  outline-offset: 2px;
+}
+
+#youtube-memo-display-settings {
+  margin: 4px 0 14px;
+  padding: 10px;
+  border: 1px solid var(--memo-border);
+  border-radius: 8px;
+}
+
+#youtube-memo-settings #youtube-memo-split-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 8px;
+  font-weight: 500;
+}
+
+#youtube-memo-split-toggle {
+  accent-color: #065fd4;
+}
+
+#youtube-memo-settings #youtube-memo-split-columns-label {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+#youtube-memo-split-columns {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid var(--memo-border);
+  border-radius: 6px;
+  background: var(--memo-input);
+  color: var(--memo-text);
+}
+
+#youtube-memo-split-help {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--memo-muted);
+}
