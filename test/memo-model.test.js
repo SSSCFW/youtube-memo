@@ -218,3 +218,47 @@ test('browser scripts expose the same behavior without requiring a module loader
   assert.equal(context.YouTubeMemoModel.parseTime('1:30'), 90);
   assert.equal(context.YouTubeMemoModel.getPageAtTime([{ id: 'a', startTime: 0 }], 1), 'a');
 });
+
+
+test('split display is optional per page and is preserved through reloads', () => {
+  const saved = {
+    version: 1,
+    pages: [
+      { id: 'a', title: 'A', content: 'plain', startTime: 0 },
+      { id: 'b', title: 'B', content: 'alpha\nbeta', startTime: 32, splitView: true, splitColumns: 3 },
+      { id: 'c', title: 'C', content: 'gamma', startTime: null, splitView: true },
+    ],
+    activePageId: 'b',
+    autoSwitch: true,
+  };
+  assert.deepEqual(model.normalizeMemo(saved), saved);
+  const reopened = model.normalizeMemo(JSON.parse(JSON.stringify(saved)));
+  assert.equal(reopened.pages[0].splitView, undefined);
+  assert.equal(reopened.pages[1].splitView, true);
+  assert.equal(reopened.pages[1].splitColumns, 3);
+  assert.equal(reopened.pages[2].splitColumns, undefined);
+  assert.equal(reopened.activePageId, 'b');
+});
+
+test('sanitizes unsafe page-specific split settings without changing text or times', () => {
+  const pages = [null, undefined, '3', 0, 1, 1.5, 7, -2, Infinity, {}, 2, 6].map((value, index) => ({
+    id: 'page-' + index, title: '', content: 'memo-' + index,
+    startTime: index, splitView: index % 2 === 0 ? true : 'true', splitColumns: value,
+  }));
+  const result = model.normalizeMemo({ pages });
+  for (let i = 0; i < pages.length; i += 1) {
+    assert.equal(result.pages[i].content, 'memo-' + i);
+    assert.equal(result.pages[i].startTime, i);
+    assert.equal(result.pages[i].splitView, i % 2 === 0 ? true : undefined);
+    assert.equal(result.pages[i].splitColumns, Number.isInteger(pages[i].splitColumns) &&
+      pages[i].splitColumns >= 2 && pages[i].splitColumns <= 6 ? pages[i].splitColumns : undefined);
+  }
+});
+
+test('new page defaults to normal layout even when previous pages use split display', () => {
+  const first = { id: 'page-1', splitView: true, splitColumns: 5 };
+  const another = model.createPage([first]);
+  assert.equal(another.splitView, undefined);
+  assert.equal(another.splitColumns, undefined);
+  assert.equal(another.content, '');
+});

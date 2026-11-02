@@ -48,6 +48,11 @@
         title: typeof page.title === 'string' ? page.title : '',
         content: typeof page.content === 'string' ? page.content : '',
         startTime: isTime(page.startTime) ? page.startTime : null,
+        // These optional properties do not modify the shape of existing
+        // single-page or unsplit saved records.
+        ...(page.splitView === true ? { splitView: true } : {}),
+        ...(Number.isInteger(page.splitColumns) && page.splitColumns >= 2 && page.splitColumns <= 6
+          ? { splitColumns: page.splitColumns } : {}),
       };
     });
 

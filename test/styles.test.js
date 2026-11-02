@@ -39,3 +39,14 @@ test('title navigation and resize header controls have scoped styles', () => {
   assert.match(getRule(css, '#youtube-memo-width-handle'), /cursor:\s*ew-resize\s*;/);
   assert.match(getRule(css, '#youtube-memo-header-show'), /margin-inline-start:\s*12px\s*!important\s*;/);
 });
+
+
+test('split mode has a dedicated multi-column text preview with safe overflow', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'styles.css'), 'utf8');
+  const preview = getRule(css, '#youtube-memo-split-preview');
+  assert.match(preview, /column-count:\s*2\s*;/);
+  assert.match(preview, /white-space:\s*pre-wrap\s*;/);
+  assert.match(preview, /overflow-x:\s*auto\s*;/);
+  assert.match(preview, /overflow-y:\s*hidden\s*;/);
+  assert.match(getRule(css, '#youtube-memo-split-toolbar'), /display:\s*flex\s*;/);
+});

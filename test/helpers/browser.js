@@ -168,7 +168,8 @@ async function createFixture(t, options = {}) {
 }
 
 async function ready(page, videoId = 'video-a') {
-  await page.locator('#youtube-memo-textarea').waitFor({ state: 'visible' });
+  // In page-specific split mode the editor is hidden, but still attached and loaded.
+  await page.locator('#youtube-memo-textarea').waitFor({ state: 'attached' });
   await page.waitForFunction((id) => {
     const textarea = document.getElementById('youtube-memo-textarea');
     return textarea && !textarea.disabled && textarea.dataset.videoId === id;
