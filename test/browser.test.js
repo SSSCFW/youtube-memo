@@ -710,7 +710,9 @@ test('remembers separate video widths and resets only the active video', async (
   await page.locator('#youtube-memo-width-handle').focus();
   await page.locator('#youtube-memo-width-handle').press('ArrowLeft');
   await page.locator('#youtube-memo-width-handle').press('ArrowLeft');
-  await page.waitForFunction(() => Number.isFinite(window.__storage.data['memo_sidebar_width_video-b']));
+  // Wait for both queued keyboard writes, not merely the first saved width.
+  await page.waitForFunction((width) =>
+    window.__storage.data['memo_sidebar_width_video-b'] > width, widthA);
   const widthB = await page.evaluate(() => window.__storage.data['memo_sidebar_width_video-b']);
   assert.ok(widthB > widthA);
 
@@ -853,6 +855,13 @@ test('auto-fit split keeps a reasonably sized memo within the viewport without i
     height: el.clientHeight, scrollHeight: el.scrollHeight,
     bottom: el.getBoundingClientRect().bottom, viewportHeight: innerHeight,
     text: el.textContent,
+    fill: getComputedStyle(el).columnFill,
+    lineXs: (() => {
+      const selection = document.createRange();
+      selection.selectNodeContents(el);
+      return [...selection.getClientRects()].filter((rect) => rect.width > 0)
+        .map((rect) => Math.round(rect.x));
+    })(),
   }));
   assert.equal(data.text, content);
   assert.equal(data.fits, 'true');
@@ -860,6 +869,9 @@ test('auto-fit split keeps a reasonably sized memo within the viewport without i
   assert.ok(data.scrollWidth <= data.width + 2, 'no horizontal scrollbar is required');
   assert.ok(data.scrollHeight <= data.height + 2, 'no vertical scrollbar is required');
   assert.ok(data.bottom < data.viewportHeight - 16, 'memo fits within one screen');
+  assert.equal(data.fill, 'balance', 'shorter notes are evenly split among columns');
+  assert.ok(Math.max(...data.lineXs) - Math.min(...data.lineXs) > 80,
+    'the text visibly spans at least two side-by-side columns');
 });
 
 test('overflowing split preview never loses content and explains horizontal scrolling', async (t) => {
