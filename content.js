@@ -21,7 +21,29 @@
   }
 
   function storageError() {
-    return chrome.runtime && chrome.runtime.lastError;
+    // An unpacked extension reload can invalidate a content script that is
+    // still running in an already-open YouTube tab.
+    try {
+      if (typeof chrome === 'undefined' || !chrome.runtime) {
+        return new Error('Extension storage API is unavailable');
+      }
+      return chrome.runtime.lastError || null;
+    } catch (error) {
+      return error;
+    }
+  }
+
+  function errorText(error) {
+    try {
+      const detail = typeof error === 'string' ? error : (error?.message || String(error));
+      return String(detail).replace(/\s+/g, ' ').trim().slice(0, 240) || 'Unknown storage error';
+    } catch {
+      return 'Unknown storage error';
+    }
+  }
+
+  function needsTabReload(message) {
+    return /extension context invalidated|extension (?:has been )?(?:reloaded|unloaded|disabled)|extension storage api is unavailable|context (?:was )?(?:invalidated|destroyed)|cannot read propert(?:y|ies) of undefined.*(?:storage|local|get)/i.test(message);
   }
 
   // One serialized queue per video. A newer pending snapshot replaces an older one.
@@ -134,6 +156,11 @@
       this.loaded = false;
       this.disposed = false;
       this.loadError = false;
+      this.loadErrorDetail = '';
+      this.loadNeedsReload = false;
+      this.loadSequence = 0;
+      this.loadAttempts = 0;
+      this.loadRetryTimer = null;
       this.validationError = '';
       this.hidden = false;
       this.detailsOpen = false;
@@ -305,7 +332,11 @@
       this.status.setAttribute('role', 'status');
       this.retry = makeButton('youtube-memo-retry', '再試行', () => {
         if (!this.isCurrent()) return;
-        if (this.loadError) this.load();
+        if (this.loadError && this.loadNeedsReload) {
+          // A dead extension context cannot be reconnected by retrying get().
+          // Navigation creates a new content-script context.
+          window.location.reload();
+        } else if (this.loadError) this.load();
         else {
           const writer = writers.get(this.videoId);
           if (writer && writer.failed) queueWrite(this.videoId, writer.failed);
@@ -397,21 +428,58 @@
       return this.memo.pages.find((page) => page.id === this.memo.activePageId) || this.memo.pages[0];
     }
 
-    load() {
+    load(isAutomaticRetry = false) {
+      // Keep unread storage data protected. Never create a blank replacement
+      // record when storage access fails.
+      clearTimeout(this.loadRetryTimer);
+      this.loadRetryTimer = null;
+      if (!isAutomaticRetry) this.loadAttempts = 0;
+      this.loadAttempts += 1;
+      const sequence = ++this.loadSequence;
       this.loadError = false;
+      this.loadErrorDetail = '';
+      this.loadNeedsReload = false;
       this.renderStatus();
+
       const key = 'memo_pages_' + this.videoId;
       const legacyKey = 'memo_' + this.videoId;
       const heightKey = 'height_' + this.videoId;
       const widthKey = 'memo_sidebar_width_' + this.videoId;
-      const complete = (result, error) => {
-        if (!this.isCurrent()) return;
-        if (error) {
-          this.loadError = true;
+      const failed = (error) => {
+        const detail = errorText(error);
+        this.loadErrorDetail = detail;
+        this.loadNeedsReload = needsTabReload(detail);
+        if (!this.loadNeedsReload && this.loadAttempts < 3) {
+          // Two bounded, automatic retries for transient storage failures.
+          this.loadRetryTimer = setTimeout(() => {
+            this.loadRetryTimer = null;
+            if (this.isCurrent() && sequence === this.loadSequence) this.load(true);
+          }, this.loadAttempts * 400);
           this.renderStatus();
           return;
         }
-        this.memo = Model.normalizeMemo(memoCache.get(this.videoId) || result[key], result[legacyKey]);
+        this.loadError = true;
+        this.renderStatus();
+      };
+
+      const complete = (result, error) => {
+        // Ignore callbacks from an older retry or a previous video.
+        if (!this.isCurrent() || sequence !== this.loadSequence) return;
+        if (error) {
+          failed(error);
+          return;
+        }
+        let memo;
+        try {
+          if (!result || typeof result !== 'object' || Array.isArray(result)) {
+            throw new Error('Invalid storage response');
+          }
+          memo = Model.normalizeMemo(memoCache.get(this.videoId) || result[key], result[legacyKey]);
+        } catch (parseError) {
+          failed(parseError);
+          return;
+        }
+        this.memo = memo;
         const height = heightCache.get(this.videoId) || result[heightKey];
         if (typeof height === 'string' && /^\d+(?:\.\d+)?px$/.test(height) && parseFloat(height) > 0) {
           this.textarea.style.height = height;
@@ -420,14 +488,23 @@
         this.sidebarWidth = Number.isFinite(savedWidth) && savedWidth >= MIN_MEMO_WIDTH
           ? Math.min(MAX_MEMO_WIDTH, Math.round(savedWidth)) : null;
         this.loaded = true;
+        this.loadErrorDetail = '';
+        this.loadNeedsReload = false;
         this.renderPage();
         this.renderStatus();
         this.heightReady = true;
         this.syncPlayback();
         scheduleReconcile(0);
       };
+
       try {
-        chrome.storage.local.get([key, legacyKey, heightKey, widthKey], (result) => complete(result || {}, storageError()));
+        if (!chrome?.storage?.local?.get) {
+          throw new Error('Extension storage API is unavailable');
+        }
+        chrome.storage.local.get([key, legacyKey, heightKey, widthKey], (result) => {
+          // Check lastError inside the callback, as required by Chrome.
+          complete(result, storageError());
+        });
       } catch (error) {
         complete({}, error);
       }
@@ -443,14 +520,21 @@
 
     renderStatus() {
       let message = '';
-      if (this.loadError) message = 'メモを読み込めませんでした。再試行してください。';
-      else if (!this.loaded) message = 'メモを読み込み中...';
+      if (this.loadError) {
+        message = this.loadNeedsReload
+          ? '拡張機能の接続が無効です。YouTubeのタブを再読み込みしてください。'
+          : 'メモを読み込めませんでした。再試行してください。';
+        if (this.loadErrorDetail) message += ' 原因: ' + this.loadErrorDetail;
+      } else if (!this.loaded) {
+        message = this.loadAttempts > 1 ? 'メモを読み込み中...（自動再試行中）' : 'メモを読み込み中...';
+      }
       else if (this.validationError) message = this.validationError;
       else if (writers.get(this.videoId)?.error) message = '保存できませんでした。再試行してください。';
       if (this.status.textContent !== message) this.status.textContent = message;
       this.statusRow.hidden = !message;
       this.statusRow.classList.toggle('youtube-memo-error', Boolean(this.loadError || this.validationError || writers.get(this.videoId)?.error));
       this.retry.hidden = !(this.loadError || writers.get(this.videoId)?.error);
+      this.retry.textContent = this.loadError && this.loadNeedsReload ? 'タブを再読み込み' : '再試行';
     }
 
     renderOptions() {
@@ -881,6 +965,8 @@
       clearTimeout(this.resizeTimer);
       clearTimeout(this.focusTimer);
       clearTimeout(this.splitFitTimer);
+      clearTimeout(this.loadRetryTimer);
+      this.loadSequence += 1;
       this.resizeObserver.disconnect();
       this.splitResizeObserver.disconnect();
       this.bindVideo(null);

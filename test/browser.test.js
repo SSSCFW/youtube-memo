@@ -992,3 +992,60 @@ test('page reordering keeps each page split preferences with its content', async
   assert.equal(saved.pages[0].content, 'Columns');
   assert.equal(saved.pages[1].splitView, undefined);
 });
+
+
+test('extension context invalidation displays a real tab-reload action without touching saved memos', async (t) => {
+  const page = await createFixture(t, {
+    saved: { 'memo_video-a': 'Important existing memo' },
+    getFailures: ['Extension context invalidated.'],
+  });
+  await page.waitForFunction(() => document.getElementById('youtube-memo-retry')?.textContent === 'タブを再読み込み');
+  assert.match(await page.locator('#youtube-memo-status').textContent(), /YouTubeのタブを再読み込み/);
+  assert.match(await page.locator('#youtube-memo-status').textContent(), /Extension context invalidated/);
+  assert.equal(await page.locator('#youtube-memo-textarea').isDisabled(), true);
+  await page.waitForTimeout(1000);
+  assert.equal(await page.evaluate(() => window.__storage.gets), 1, 'reloading the tab, not repeated storage retries, is required');
+  assert.equal(await page.evaluate(() => window.__storage.data['memo_video-a']), 'Important existing memo');
+  assert.equal(await page.evaluate(() => window.__storage.writes.length), 0);
+});
+
+test('a synchronous invalidated storage API also offers tab reload safely', async (t) => {
+  const page = await createFixture(t, {
+    saved: { 'memo_video-a': 'Never overwrite this' },
+    getThrows: ['Extension context invalidated.'],
+  });
+  await page.waitForFunction(() => document.getElementById('youtube-memo-retry')?.textContent === 'タブを再読み込み');
+  assert.equal(await page.locator('#youtube-memo-textarea').isDisabled(), true);
+  assert.equal(await page.evaluate(() => window.__storage.gets), 1);
+  assert.equal(await page.evaluate(() => window.__storage.writes.length), 0);
+});
+
+test('transient storage read failures automatically recover without creating an empty memo', async (t) => {
+  const page = await createFixture(t, {
+    saved: { 'memo_video-a': 'Preserved content' },
+    getFailures: ['Storage temporarily unavailable', 'Storage temporarily unavailable'],
+  });
+  await ready(page);
+  await textEquals(page, 'Preserved content');
+  assert.equal(await page.evaluate(() => window.__storage.gets), 3);
+  assert.equal(await page.locator('#youtube-memo-status-row').isVisible(), false);
+  assert.equal(await page.evaluate(() => window.__storage.writes.some((entry) =>
+    Object.hasOwn(entry, 'memo_pages_video-a'))), false);
+});
+
+test('a persistent read error includes the diagnostic and manual retry can restore saved content', async (t) => {
+  const page = await createFixture(t, {
+    saved: { 'memo_video-a': 'Read after retry' },
+    getFailures: ['Temporary read failure', 'Temporary read failure', 'Temporary read failure'],
+  });
+  await page.waitForFunction(() =>
+    document.getElementById('youtube-memo-status')?.textContent.includes('原因: Temporary read failure'));
+  assert.equal(await page.locator('#youtube-memo-retry').textContent(), '再試行');
+  assert.equal(await page.locator('#youtube-memo-textarea').isDisabled(), true);
+  assert.equal(await page.evaluate(() => window.__storage.gets), 3);
+  assert.equal(await page.evaluate(() => window.__storage.writes.length), 0);
+  await page.locator('#youtube-memo-retry').click();
+  await ready(page);
+  await textEquals(page, 'Read after retry');
+  assert.equal(await page.evaluate(() => window.__storage.gets), 4);
+});
