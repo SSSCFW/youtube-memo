@@ -1160,11 +1160,12 @@ test('keyboard height adjustment remains available when text is split', async (t
   await handle.press('ArrowDown');
   await page.waitForFunction(h => document.getElementById('youtube-memo-split-preview')?.getBoundingClientRect().height === h + 24, before);
   const changed = await savedRecord(page, 'video-a', key =>
-    window.__storage.data[key]?.pages?.[0]?.splitHeight === before + 24);
+    window.__storage.data[key]?.pages?.[0]?.splitHeight ===
+      Math.round(document.getElementById('youtube-memo-split-preview').getBoundingClientRect().height));
   assert.equal(changed.pages[0].splitHeight, before + 24);
   await handle.press('ArrowUp');
-  await savedRecord(page, 'video-a', key =>
-    window.__storage.data[key]?.pages?.[0]?.splitHeight === before);
+  await page.waitForFunction(height =>
+    window.__storage.data['memo_pages_video-a']?.pages?.[0]?.splitHeight === height, before);
 });
 
 test('column gap is adjustable and persisted per page without modifying memo content', async (t) => {
