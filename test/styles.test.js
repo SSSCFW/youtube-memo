@@ -57,7 +57,7 @@ test('manual split reader uses a stable viewport-relative height and exposes the
   const preview = getRule(css, '#youtube-memo-split-preview');
   const handle = getRule(css, '#youtube-memo-split-height-handle');
   assert.match(preview, /height:\s*clamp\(240px,\s*55vh,\s*560px\)/);
-  assert.match(preview, /column-fill:\s*balance\s*;/);
+  assert.match(preview, /column-fill:\s*auto\s*;/);
   assert.match(preview, /overflow-x:\s*auto\s*;/);
   assert.match(handle, /cursor:\s*ns-resize\s*;/);
 });

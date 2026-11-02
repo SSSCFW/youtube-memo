@@ -413,7 +413,8 @@ html.youtube-memo-dragging * {
   column-count: 2;
   column-gap: 14px;
   column-rule: 1px solid var(--memo-border);
-  column-fill: balance;
+  /* Fill the left column top-to-bottom before moving to the next column. */
+  column-fill: auto;
   overflow-x: auto;
   overflow-y: hidden;
   overscroll-behavior-x: contain;

@@ -655,7 +655,8 @@
         this.splitPreview.style.columnGap = String(
           Number.isInteger(page.splitGap) ? page.splitGap : 14) + 'px';
         this.splitPreview.style.fontSize = '';
-        this.splitPreview.style.columnFill = 'balance';
+        // Do not balance short memos across columns: fill the left column first.
+        this.splitPreview.style.columnFill = 'auto';
         this.splitPreview.style.overflowX = 'auto';
         this.splitPreview.scrollLeft = 0;
         this.splitModeLabel.textContent = '横分割表示・' + (page.splitColumns || 2) + '列';
