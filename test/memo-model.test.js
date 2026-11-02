@@ -262,3 +262,39 @@ test('new page defaults to normal layout even when previous pages use split disp
   assert.equal(another.splitColumns, undefined);
   assert.equal(another.content, '');
 });
+
+
+test('validates and persists user-resized split height and manual column gap', () => {
+  const saved = {
+    version: 1,
+    pages: [
+      { id: 'one', title: 'Page', content: 'Words', startTime: 0,
+        splitView: true, splitColumns: 4, splitHeight: 520, splitGap: 32 },
+      { id: 'two', title: '', content: 'Next', startTime: 20 },
+    ],
+    activePageId: 'one',
+    autoSwitch: false,
+  };
+  assert.deepEqual(model.normalizeMemo(saved), saved);
+  assert.deepEqual(model.normalizeMemo(JSON.parse(JSON.stringify(saved))), saved);
+});
+
+test('invalid split dimensions are discarded without changing note content', () => {
+  for (const size of [-1, 0, 151, 1401, 100.5, '520', null, NaN, Infinity]) {
+    const memo = model.normalizeMemo({ pages: [
+      { id: 'test', title: 'Keep', content: 'Preserve', startTime: 0,
+        splitView: true, splitHeight: size, splitGap: -10 },
+    ] });
+    assert.equal(memo.pages[0].content, 'Preserve');
+    assert.equal(memo.pages[0].splitHeight, undefined);
+    assert.equal(memo.pages[0].splitGap, undefined);
+  }
+  const boundaries = model.normalizeMemo({ pages: [
+    { id: 'lower', splitHeight: 160, splitGap: 0 },
+    { id: 'upper', splitHeight: 1400, splitGap: 48 },
+  ] });
+  assert.equal(boundaries.pages[0].splitHeight, 160);
+  assert.equal(boundaries.pages[0].splitGap, 0);
+  assert.equal(boundaries.pages[1].splitHeight, 1400);
+  assert.equal(boundaries.pages[1].splitGap, 48);
+});

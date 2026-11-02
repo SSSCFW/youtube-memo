@@ -53,6 +53,10 @@
         ...(page.splitView === true ? { splitView: true } : {}),
         ...(Number.isInteger(page.splitColumns) && page.splitColumns >= 2 && page.splitColumns <= 6
           ? { splitColumns: page.splitColumns } : {}),
+        ...(Number.isInteger(page.splitHeight) && page.splitHeight >= 160 && page.splitHeight <= 1400
+          ? { splitHeight: page.splitHeight } : {}),
+        ...(Number.isInteger(page.splitGap) && page.splitGap >= 0 && page.splitGap <= 48
+          ? { splitGap: page.splitGap } : {}),
       };
     });
 
