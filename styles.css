@@ -397,8 +397,10 @@ html.youtube-memo-dragging * {
 #youtube-memo-split-preview {
   box-sizing: border-box;
   width: 100%;
-  height: 280px;
+  /* Stable relative to the viewport, not the document scroll position. */
+  height: clamp(240px, 55vh, 560px);
   min-height: 160px;
+  max-height: 1400px;
   padding: 10px 12px;
   border: 1px solid var(--memo-border);
   border-radius: 8px;
@@ -411,9 +413,10 @@ html.youtube-memo-dragging * {
   column-count: 2;
   column-gap: 14px;
   column-rule: 1px solid var(--memo-border);
-  column-fill: auto;
+  column-fill: balance;
   overflow-x: auto;
   overflow-y: hidden;
+  overscroll-behavior-x: contain;
   scrollbar-width: thin;
 }
 
@@ -463,4 +466,63 @@ html.youtube-memo-dragging * {
   font-size: 12px;
   line-height: 1.5;
   color: var(--memo-muted);
+}
+
+
+/* The split reader's own lower-edge grip restores manual vertical resizing.
+   Scrolling inside the reader never affects its height or the document layout. */
+#youtube-memo-split-height-handle {
+  box-sizing: border-box;
+  width: 100%;
+  height: 20px;
+  margin: 3px 0 0;
+  border-radius: 0 0 7px 7px;
+  border: 1px solid var(--memo-border);
+  background: var(--memo-button);
+  color: var(--memo-muted);
+  font: 500 11px/18px Roboto, Arial, sans-serif;
+  text-align: center;
+  cursor: ns-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+#youtube-memo-split-height-handle:hover,
+#youtube-memo-split-height-handle:focus-visible {
+  background: var(--yt-spec-brand-button-background, #065fd4);
+  color: #fff;
+  outline: 2px solid #3ea6ff;
+  outline-offset: 1px;
+}
+
+#youtube-memo-settings #youtube-memo-split-gap-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  margin: 10px 0 5px;
+}
+
+#youtube-memo-split-gap-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+#youtube-memo-split-gap {
+  flex: 1 1 auto;
+  min-width: 0;
+  accent-color: #065fd4;
+}
+
+#youtube-memo-split-gap-value {
+  width: 38px;
+  flex: 0 0 auto;
+  text-align: right;
+  color: var(--memo-muted);
+  font-size: 12px;
+}
+
+#youtube-memo-split-height-reset {
+  margin-bottom: 4px;
 }

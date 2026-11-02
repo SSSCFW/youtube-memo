@@ -838,7 +838,7 @@ test('split display preserves Japanese newlines and literal HTML without executi
   assert.equal(await page.locator('#youtube-memo-split-preview').evaluate((el) => getComputedStyle(el).whiteSpace), 'pre-wrap');
 });
 
-test('auto-fit split keeps a reasonably sized memo within the viewport without internal scrolling', async (t) => {
+test('manual two-column layout fits a moderate memo within a viewport', async (t) => {
   const content = Array.from({ length: 36 }, (_, i) => '行 ' + (i + 1)).join('\n');
   const page = await createFixture(t, {
     saved: { 'memo_pages_video-a': record({ pages: [
@@ -1048,4 +1048,147 @@ test('a persistent read error includes the diagnostic and manual retry can resto
   await ready(page);
   await textEquals(page, 'Read after retry');
   assert.equal(await page.evaluate(() => window.__storage.gets), 4);
+});
+
+
+test('split column selection is manual only, never auto-fitting column count or font size', async (t) => {
+  const page = await createFixture(t, { saved: {
+    'memo_pages_video-a': record({ pages: [
+      { id: 'one', title: '', content: 'Alpha\nBeta\nGamma', startTime: 0, splitView: true },
+    ] }),
+  } });
+  await ready(page);
+  await page.locator('#youtube-memo-split-preview').waitFor({ state: 'visible' });
+  await page.locator('#youtube-memo-settings-toggle').click();
+  assert.deepEqual(await page.locator('#youtube-memo-split-columns option').evaluateAll(
+    options => options.map(option => option.value)), ['2', '3', '4', '5', '6']);
+  assert.equal(await page.locator('#youtube-memo-split-columns').inputValue(), '2');
+  await page.locator('#youtube-memo-split-columns').selectOption('4');
+  await page.waitForFunction(() => document.getElementById('youtube-memo-split-preview')?.dataset.columns === '4');
+  const info = await page.locator('#youtube-memo-split-preview').evaluate(el => ({
+    columns: getComputedStyle(el).columnCount,
+    fontSize: getComputedStyle(el).fontSize,
+    height: el.getBoundingClientRect().height,
+  }));
+  assert.equal(info.columns, '4');
+  assert.equal(info.fontSize, '14px');
+  assert.ok(info.height > 200);
+  const memo = await savedRecord(page, 'video-a', key =>
+    window.__storage.data[key]?.pages?.[0]?.splitColumns === 4);
+  assert.equal(memo.pages[0].splitColumns, 4);
+});
+
+test('scrolling YouTube or horizontally reading never grows split height or surrounding whitespace', async (t) => {
+  const content = Array.from({ length: 210 }, (_, i) => '長い歌詞-' + i).join('\n');
+  const page = await createFixture(t, { saved: { 'memo_pages_video-a': record({ pages: [
+    { id: 'one', title: '', content, startTime: 0, splitView: true, splitColumns: 3 },
+  ] }) } });
+  await ready(page);
+  await page.waitForFunction(() => document.getElementById('youtube-memo-split-preview')?.dataset.fits === 'false');
+  await page.evaluate(() => {
+    const spacer = document.createElement('div');
+    spacer.id = 'test-spacer';
+    spacer.style.height = '1600px';
+    document.body.append(spacer);
+  });
+  const read = async () => page.evaluate(() => {
+    const el = document.getElementById('youtube-memo-split-preview');
+    return {
+      height: el.getBoundingClientRect().height,
+      documentHeight: document.documentElement.scrollHeight,
+      scrollWidth: el.scrollWidth,
+      parentHeight: document.getElementById('youtube-memo-container').getBoundingClientRect().height,
+    };
+  });
+  const before = await read();
+  await page.evaluate(() => scrollTo(0, 330));
+  await page.waitForTimeout(1500);
+  const afterPageScroll = await read();
+  assert.equal(afterPageScroll.height, before.height);
+  assert.equal(afterPageScroll.documentHeight, before.documentHeight);
+  assert.equal(afterPageScroll.parentHeight, before.parentHeight);
+  await page.locator('#youtube-memo-split-preview').evaluate(el => { el.scrollLeft = 220; });
+  await page.waitForTimeout(500);
+  const afterHorizontal = await read();
+  assert.equal(afterHorizontal.height, before.height);
+  assert.equal(afterHorizontal.documentHeight, before.documentHeight);
+  assert.equal(afterHorizontal.scrollWidth, before.scrollWidth);
+  assert.equal(afterHorizontal.parentHeight, before.parentHeight);
+});
+
+test('manual split height drag saves per page and reset returns to default', async (t) => {
+  const page = await createFixture(t, { saved: { 'memo_pages_video-a': record({ pages: [
+    { id: 'one', title: 'Intro', content: 'Part one\n'.repeat(24), startTime: 0, splitView: true, splitColumns: 2 },
+    { id: 'two', title: 'Next', content: 'Part two\n'.repeat(24), startTime: 20, splitView: true, splitColumns: 3 },
+  ] }) } });
+  await ready(page);
+  const viewer = page.locator('#youtube-memo-split-preview');
+  const handle = page.locator('#youtube-memo-split-height-handle');
+  await handle.waitFor({ state: 'visible' });
+  const before = await viewer.evaluate(el => Math.round(el.getBoundingClientRect().height));
+  const box = await handle.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 + 105, { steps: 8 });
+  await page.mouse.up();
+  const saved = await savedRecord(page, 'video-a', key =>
+    window.__storage.data[key]?.pages?.[0]?.splitHeight > 0);
+  const after = await viewer.evaluate(el => Math.round(el.getBoundingClientRect().height));
+  assert.ok(after > before + 70, 'dragging below the preview expands its height');
+  assert.equal(saved.pages[0].splitHeight, after);
+  await page.locator('#youtube-memo-next').click();
+  const secondHeight = await viewer.evaluate(el => Math.round(el.getBoundingClientRect().height));
+  assert.ok(secondHeight < after - 70, 'next page has its own default height');
+  await page.locator('#youtube-memo-prev').click();
+  assert.equal(await viewer.evaluate(el => Math.round(el.getBoundingClientRect().height)), after);
+  await page.locator('#youtube-memo-settings-toggle').click();
+  await page.locator('#youtube-memo-split-height-reset').click();
+  await savedRecord(page, 'video-a', key =>
+    window.__storage.data[key]?.pages?.[0]?.splitHeight === undefined);
+  assert.equal(await viewer.evaluate(el => Math.round(el.getBoundingClientRect().height)), before);
+});
+
+test('keyboard height adjustment remains available when text is split', async (t) => {
+  const page = await createFixture(t, { saved: { 'memo_pages_video-a': record({ pages: [
+    { id: 'one', title: '', content: 'Lyrics', startTime: 0, splitView: true },
+  ] }) } });
+  await ready(page);
+  const handle = page.locator('#youtube-memo-split-height-handle');
+  await handle.waitFor({ state: 'visible' });
+  const before = await page.locator('#youtube-memo-split-preview').evaluate(el => Math.round(el.getBoundingClientRect().height));
+  await handle.focus();
+  await handle.press('ArrowDown');
+  await page.waitForFunction(h => document.getElementById('youtube-memo-split-preview')?.getBoundingClientRect().height === h + 24, before);
+  const changed = await savedRecord(page, 'video-a', key =>
+    window.__storage.data[key]?.pages?.[0]?.splitHeight ===
+      Math.round(document.getElementById('youtube-memo-split-preview').getBoundingClientRect().height));
+  assert.equal(changed.pages[0].splitHeight, before + 24);
+  await handle.press('ArrowUp');
+  await page.waitForFunction(height =>
+    window.__storage.data['memo_pages_video-a']?.pages?.[0]?.splitHeight === height, before);
+});
+
+test('column gap is adjustable and persisted per page without modifying memo content', async (t) => {
+  const page = await createFixture(t, { saved: { 'memo_pages_video-a': record({ pages: [
+    { id: 'one', title: 'A', content: 'Alpha', startTime: 0, splitView: true },
+    { id: 'two', title: 'B', content: 'Beta', startTime: 20, splitView: true },
+  ] }) } });
+  await ready(page);
+  await page.locator('#youtube-memo-settings-toggle').click();
+  const gap = page.locator('#youtube-memo-split-gap');
+  assert.equal(await gap.inputValue(), '14');
+  await gap.evaluate(el => {
+    el.value = '32';
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  const saved = await savedRecord(page, 'video-a', key =>
+    window.__storage.data[key]?.pages?.[0]?.splitGap === 32);
+  assert.equal(saved.pages[0].content, 'Alpha');
+  assert.equal(await page.locator('#youtube-memo-split-preview').evaluate(el => getComputedStyle(el).columnGap), '32px');
+  await page.locator('#youtube-memo-next').click();
+  assert.equal(await gap.inputValue(), '14');
+  assert.equal(await page.locator('#youtube-memo-split-preview').evaluate(el => getComputedStyle(el).columnGap), '14px');
+  await page.locator('#youtube-memo-prev').click();
+  assert.equal(await gap.inputValue(), '32');
 });

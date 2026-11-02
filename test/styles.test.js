@@ -50,3 +50,14 @@ test('split mode has a dedicated multi-column text preview with safe overflow', 
   assert.match(preview, /overflow-y:\s*hidden\s*;/);
   assert.match(getRule(css, '#youtube-memo-split-toolbar'), /display:\s*flex\s*;/);
 });
+
+
+test('manual split reader uses a stable viewport-relative height and exposes the height grip', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'styles.css'), 'utf8');
+  const preview = getRule(css, '#youtube-memo-split-preview');
+  const handle = getRule(css, '#youtube-memo-split-height-handle');
+  assert.match(preview, /height:\s*clamp\(240px,\s*55vh,\s*560px\)/);
+  assert.match(preview, /column-fill:\s*balance\s*;/);
+  assert.match(preview, /overflow-x:\s*auto\s*;/);
+  assert.match(handle, /cursor:\s*ns-resize\s*;/);
+});

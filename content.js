@@ -229,7 +229,19 @@
       this.splitPreview.tabIndex = 0;
       this.splitPreview.setAttribute('role', 'region');
       this.splitPreview.setAttribute('aria-label', '横分割されたメモ本文');
-      this.area.append(this.titleRow, this.splitToolbar, this.splitPreview, this.textarea);
+      // Dedicated height grip: resizing the reader must not depend on the
+      // textarea's native resize affordance.
+      this.splitHeightHandle = makeElement('div', 'youtube-memo-split-height-handle', '↕ 高さを調整');
+      this.splitHeightHandle.hidden = true;
+      this.splitHeightHandle.tabIndex = 0;
+      this.splitHeightHandle.setAttribute('role', 'separator');
+      this.splitHeightHandle.setAttribute('aria-orientation', 'horizontal');
+      this.splitHeightHandle.setAttribute('aria-label', '横分割メモの高さを調整');
+      this.splitHeightHandle.title = '上下にドラッグしてメモの高さを調整（上下キーでも変更できます）';
+      this.splitHeightHandle.addEventListener('pointerdown', (event) => this.beginSplitHeightDrag(event));
+      this.splitHeightHandle.addEventListener('keydown', (event) => this.adjustSplitHeightWithKeyboard(event));
+      this.splitHeightDrag = null;
+      this.area.append(this.titleRow, this.splitToolbar, this.splitPreview, this.splitHeightHandle, this.textarea);
 
       // The drag grip lives on the memo's left edge, adjoining the video.
       this.widthHandle = makeElement('div', 'youtube-memo-width-handle', '⋮');
@@ -314,14 +326,31 @@
       const columnLabel = makeElement('label', 'youtube-memo-split-columns-label', '列数');
       columnLabel.htmlFor = 'youtube-memo-split-columns';
       this.splitColumns = makeElement('select', 'youtube-memo-split-columns');
-      for (const value of ['auto', '2', '3', '4', '5', '6']) {
-        const option = makeElement('option', null, value === 'auto' ? '自動（画面内に収める）' : value + '列');
+      for (const value of ['2', '3', '4', '5', '6']) {
+        const option = makeElement('option', null, value + '列');
         option.value = value;
         this.splitColumns.append(option);
       }
+      const gapLabel = makeElement('label', 'youtube-memo-split-gap-label', '列の間隔');
+      gapLabel.htmlFor = 'youtube-memo-split-gap';
+      this.splitGap = makeElement('input', 'youtube-memo-split-gap');
+      this.splitGap.type = 'range';
+      this.splitGap.min = '0';
+      this.splitGap.max = '48';
+      this.splitGap.step = '2';
+      this.splitGap.value = '14';
+      this.splitGapValue = makeElement('span', 'youtube-memo-split-gap-value', '14px');
+      const gapRow = makeElement('div', 'youtube-memo-split-gap-row');
+      gapRow.append(this.splitGap, this.splitGapValue);
+      this.splitHeightReset = makeButton('youtube-memo-split-height-reset', '表示の高さをリセット', () => {
+        if (!this.canEdit()) return;
+        delete this.activePage().splitHeight;
+        this.renderSplitView();
+        this.persist();
+      });
       const splitHelp = makeElement('p', 'youtube-memo-split-help',
-        'ページごとに保存します。横分割中は閲覧用です。「メモを編集」で本文を変更できます。');
-      splitGroup.append(splitLabel, columnLabel, this.splitColumns, splitHelp);
+        '列数・列の間隔・表示の高さはページごとに保存されます。下端をドラッグして高さを調整できます。');
+      splitGroup.append(splitLabel, columnLabel, this.splitColumns, gapLabel, gapRow, this.splitHeightReset, splitHelp);
       const widthRow = makeElement('div', 'youtube-memo-width-settings');
       this.widthReset = makeButton('youtube-memo-width-reset', '横幅をリセット', () => this.resetWidth());
       widthRow.append(this.widthReset);
@@ -369,14 +398,23 @@
       });
       this.splitColumns.addEventListener('change', () => {
         if (!this.canEdit()) return;
-        if (this.splitColumns.value === 'auto') delete this.activePage().splitColumns;
-        else {
-          const columns = Number(this.splitColumns.value);
-          if (!Number.isInteger(columns) || columns < 2 || columns > 6) return;
-          this.activePage().splitColumns = columns;
-        }
+        const columns = Number(this.splitColumns.value);
+        if (!Number.isInteger(columns) || columns < 2 || columns > 6) return;
+        this.activePage().splitColumns = columns;
         this.renderSplitView();
         this.persist();
+      });
+      this.splitGap.addEventListener('input', () => {
+        if (!this.canEdit()) return;
+        const gap = Number(this.splitGap.value);
+        if (!Number.isInteger(gap) || gap < 0 || gap > 48) return;
+        this.activePage().splitGap = gap;
+        this.splitGapValue.textContent = gap + 'px';
+        this.splitPreview.style.columnGap = gap + 'px';
+        this.scheduleSplitFit();
+      });
+      this.splitGap.addEventListener('change', () => {
+        if (this.canEdit()) this.persist();
       });
       this.autoSwitch.addEventListener('change', () => {
         if (!this.canEdit()) return;
@@ -564,7 +602,9 @@
       this.splitEditing = false;
       this.splitToggle.checked = page.splitView === true;
       this.splitColumns.value = Number.isInteger(page.splitColumns) &&
-        page.splitColumns >= 2 && page.splitColumns <= 6 ? String(page.splitColumns) : 'auto';
+        page.splitColumns >= 2 && page.splitColumns <= 6 ? String(page.splitColumns) : '2';
+      this.splitGap.value = String(Number.isInteger(page.splitGap) ? page.splitGap : 14);
+      this.splitGapValue.textContent = this.splitGap.value + 'px';
       this.renderSplitView();
       this.renderOptions();
       this.renderEnabled();
@@ -590,26 +630,40 @@
       this.widthReset.disabled = !this.loaded || this.sidebarWidth === null;
       this.splitToggle.disabled = !this.loaded;
       this.splitColumns.disabled = !this.loaded || !this.splitToggle.checked;
+      this.splitGap.disabled = !this.loaded || !this.splitToggle.checked;
+      this.splitHeightReset.disabled = !this.loaded || !Number.isInteger(this.activePage().splitHeight);
       this.splitEditButton.disabled = !this.loaded;
     }
 
     renderSplitView() {
       const enabled = this.loaded && this.activePage().splitView === true;
       const reading = enabled && !this.splitEditing;
+      const page = this.loaded ? this.activePage() : null;
       this.splitToolbar.hidden = !enabled;
       this.splitPreview.hidden = !reading;
+      this.splitHeightHandle.hidden = !reading;
       this.textarea.hidden = reading;
       this.splitEditButton.textContent = this.splitEditing ? '分割表示に戻る' : 'メモを編集';
       this.splitNotice.textContent = '';
       if (reading) {
-        // Text-only rendering is deliberate: notes must not be interpreted as HTML.
-        this.splitPreview.textContent = this.activePage().content;
+        // Stable, user-controlled dimensions: no recalculation from the
+        // element's screen position while scrolling the YouTube document.
+        this.splitPreview.textContent = page.content;
+        this.splitPreview.style.height = Number.isInteger(page.splitHeight) ?
+          page.splitHeight + 'px' : '';
+        this.splitPreview.style.columnCount = String(page.splitColumns || 2);
+        this.splitPreview.style.columnGap = String(
+          Number.isInteger(page.splitGap) ? page.splitGap : 14) + 'px';
+        this.splitPreview.style.fontSize = '';
+        this.splitPreview.style.columnFill = 'balance';
+        this.splitPreview.style.overflowX = 'auto';
         this.splitPreview.scrollLeft = 0;
-        this.lastSplitFit = '';
+        this.splitModeLabel.textContent = '横分割表示・' + (page.splitColumns || 2) + '列';
         this.scheduleSplitFit();
       } else {
         clearTimeout(this.splitFitTimer);
         this.splitFitTimer = null;
+        this.stopSplitHeightDrag(true);
       }
       this.renderEnabled();
     }
@@ -626,64 +680,87 @@
       if (!this.isCurrent() || !this.loaded || this.hidden || this.splitPreview.hidden ||
           !this.splitPreview.isConnected) return;
       const preview = this.splitPreview;
-      const width = preview.clientWidth;
-      if (width < 100) return;
+      // Reading the overflow geometry may update a label, but must NEVER
+      // change reader height, column count, font size or scroll offset.
+      const fits = preview.scrollWidth <= preview.clientWidth + 2 &&
+        preview.scrollHeight <= preview.clientHeight + 2;
+      preview.dataset.columns = String(this.activePage().splitColumns || 2);
+      preview.dataset.fits = String(fits);
+      const columns = this.activePage().splitColumns || 2;
+      this.splitModeLabel.textContent = '横分割表示・' + columns + '列';
+      this.splitNotice.textContent = fits ? '' : '続きは横スクロールで読めます。';
+      this.splitHeightHandle.setAttribute('aria-valuenow',
+        String(Math.round(preview.getBoundingClientRect().height)));
+      this.splitHeightHandle.setAttribute('aria-valuemin', '160');
+      this.splitHeightHandle.setAttribute('aria-valuemax', '1400');
+    }
 
-      const top = preview.getBoundingClientRect().top;
-      const bottomReserve = Math.max(52,
-        this.container.getBoundingClientRect().bottom - preview.getBoundingClientRect().bottom);
-      const height = Math.max(160, Math.min(900,
-        Math.floor(window.innerHeight - top - bottomReserve - 12)));
-      const requested = this.activePage().splitColumns;
-      const maxColumns = Math.max(1, Math.min(6, Math.floor((width - 20 + 14) / (130 + 14))));
-      const choices = Number.isInteger(requested)
-        ? [Math.max(1, Math.min(maxColumns, requested))]
-        : Array.from({ length: Math.max(0, maxColumns - 1) }, (_, i) => i + 2);
-      // Very narrow columns cannot display text legibly, so fall back to one.
-      if (choices.length === 0) choices.push(1);
-      const signature = [this.memo.activePageId, width, Math.round(top), height,
-        requested || 'auto', this.activePage().content.length, this.detailsOpen].join(':');
-      if (signature === this.lastSplitFit) return;
-      this.lastSplitFit = signature;
-      preview.style.height = height + 'px';
-      // Measure with sequential column filling to detect true overflow, then
-      // balance the winning columns so shorter notes also display side by side.
-      preview.style.columnFill = 'auto';
+    beginSplitHeightDrag(event) {
+      if (event.button !== 0 || !this.canEdit() || this.splitPreview.hidden) return;
+      event.preventDefault();
+      this.stopSplitHeightDrag(true);
+      this.splitHeightDrag = {
+        pointerId: event.pointerId,
+        startY: event.clientY,
+        startHeight: Math.round(this.splitPreview.getBoundingClientRect().height),
+        originalHeight: this.activePage().splitHeight,
+      };
+      this.onSplitHeightMove = (e) => this.moveSplitHeightDrag(e);
+      this.onSplitHeightEnd = (e) => this.stopSplitHeightDrag(false, e);
+      this.onSplitHeightCancel = (e) => this.stopSplitHeightDrag(true, e);
+      window.addEventListener('pointermove', this.onSplitHeightMove);
+      window.addEventListener('pointerup', this.onSplitHeightEnd);
+      window.addEventListener('pointercancel', this.onSplitHeightCancel);
+      this.splitHeightHandle.setPointerCapture?.(event.pointerId);
+    }
 
-      let chosen = null;
-      // Prefer full-size text and additional columns before shrinking text.
-      for (const size of [14, 13, 12, 11]) {
-        for (const columns of choices) {
-          preview.style.fontSize = size + 'px';
-          preview.style.columnCount = String(columns);
-          if (preview.scrollWidth <= preview.clientWidth + 2 &&
-              preview.scrollHeight <= preview.clientHeight + 2) {
-            chosen = { columns, size, fits: true };
-            break;
-          }
+    moveSplitHeightDrag(event) {
+      const drag = this.splitHeightDrag;
+      if (!drag || drag.pointerId !== event.pointerId || !this.isCurrent()) return;
+      const height = Math.round(Math.max(160, Math.min(1400,
+        drag.startHeight + event.clientY - drag.startY)));
+      if (Math.round(this.splitPreview.getBoundingClientRect().height) === height) return;
+      this.splitPreview.style.height = height + 'px';
+      this.scheduleSplitFit();
+    }
+
+    stopSplitHeightDrag(cancel, event) {
+      const drag = this.splitHeightDrag;
+      if (!drag || (event && drag.pointerId !== event.pointerId)) return;
+      this.splitHeightDrag = null;
+      window.removeEventListener('pointermove', this.onSplitHeightMove);
+      window.removeEventListener('pointerup', this.onSplitHeightEnd);
+      window.removeEventListener('pointercancel', this.onSplitHeightCancel);
+      if (this.splitHeightHandle.hasPointerCapture?.(drag.pointerId)) {
+        this.splitHeightHandle.releasePointerCapture(drag.pointerId);
+      }
+      if (cancel || !this.isCurrent() || this.splitPreview.hidden) {
+        this.splitPreview.style.height =
+          Number.isInteger(drag.originalHeight) ? drag.originalHeight + 'px' : '';
+      } else {
+        const height = Math.round(this.splitPreview.getBoundingClientRect().height);
+        if (height !== drag.startHeight) {
+          this.activePage().splitHeight = height;
+          this.persist();
         }
-        if (chosen) break;
       }
-      if (!chosen) {
-        chosen = { columns: choices[choices.length - 1], size: 11, fits: false };
-        preview.style.fontSize = '11px';
-        preview.style.columnCount = String(chosen.columns);
-      }
-      if (chosen.fits) {
-        preview.style.columnFill = 'balance';
-        // Some browsers choose taller balanced columns for unusual content.
-        // Retain the fully-fitting sequential layout in that case.
-        if (preview.scrollWidth > preview.clientWidth + 2 ||
-            preview.scrollHeight > preview.clientHeight + 2) {
-          preview.style.columnFill = 'auto';
-        }
-      }
-      preview.dataset.columns = String(chosen.columns);
-      preview.dataset.fits = String(chosen.fits);
-      preview.style.overflowX = chosen.fits ? 'hidden' : 'auto';
-      this.splitModeLabel.textContent = '横分割表示・' + chosen.columns + '列';
-      this.splitNotice.textContent = chosen.fits ? '' :
-        '一画面に収まらないため横スクロールできます。メモの横幅を広げると改善します。';
+      this.scheduleSplitFit();
+      this.renderEnabled();
+    }
+
+    adjustSplitHeightWithKeyboard(event) {
+      if (!['ArrowUp', 'ArrowDown'].includes(event.key) ||
+          !this.canEdit() || this.splitPreview.hidden) return;
+      event.preventDefault();
+      const delta = event.key === 'ArrowUp' ? -24 : 24;
+      const height = Math.round(Math.max(160, Math.min(1400,
+        this.splitPreview.getBoundingClientRect().height + delta)));
+      if (height === Math.round(this.splitPreview.getBoundingClientRect().height)) return;
+      this.splitPreview.style.height = height + 'px';
+      this.activePage().splitHeight = height;
+      this.persist();
+      this.renderEnabled();
+      this.scheduleSplitFit();
     }
 
     renderVisibility() {
@@ -959,6 +1036,7 @@
 
     dispose() {
       this.stopWidthDrag(true);
+      this.stopSplitHeightDrag(true);
       this.clearWidthLayout();
       this.headerShow.remove();
       this.disposed = true;
