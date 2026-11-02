@@ -869,7 +869,7 @@ test('manual two-column layout fits a moderate memo within a viewport', async (t
   assert.ok(data.scrollWidth <= data.width + 2, 'no horizontal scrollbar is required');
   assert.ok(data.scrollHeight <= data.height + 2, 'no vertical scrollbar is required');
   assert.ok(data.bottom < data.viewportHeight - 16, 'memo fits within one screen');
-  assert.equal(data.fill, 'balance', 'shorter notes are evenly split among columns');
+  assert.equal(data.fill, 'auto', 'memo fills one column before starting the next');
   assert.ok(Math.max(...data.lineXs) - Math.min(...data.lineXs) > 80,
     'the text visibly spans at least two side-by-side columns');
 });
@@ -1191,4 +1191,69 @@ test('column gap is adjustable and persisted per page without modifying memo con
   assert.equal(await page.locator('#youtube-memo-split-preview').evaluate(el => getComputedStyle(el).columnGap), '14px');
   await page.locator('#youtube-memo-prev').click();
   assert.equal(await gap.inputValue(), '32');
+});
+
+
+test('two-column split keeps short content entirely in the left column', async (t) => {
+  const content = Array.from({ length: 8 }, (_, i) => '短いメモ ' + (i + 1)).join('\n');
+  const page = await createFixture(t, {
+    saved: { 'memo_pages_video-a': record({ pages: [
+      { id: 'one', title: 'Short', content, startTime: 0, splitView: true, splitColumns: 2 },
+    ] }) },
+  });
+  await ready(page);
+  const preview = page.locator('#youtube-memo-split-preview');
+  await preview.waitFor({ state: 'visible' });
+  await page.waitForFunction(() => document.getElementById('youtube-memo-split-preview')?.dataset.fits === 'true');
+  const metrics = await preview.evaluate((el) => {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const xs = [...range.getClientRects()].filter((rect) => rect.width > 0).map((rect) => Math.round(rect.x));
+    return {
+      text: el.textContent,
+      fill: getComputedStyle(el).columnFill,
+      columns: getComputedStyle(el).columnCount,
+      xSpan: Math.max(...xs) - Math.min(...xs),
+      scrollWidth: el.scrollWidth,
+      clientWidth: el.clientWidth,
+    };
+  });
+  assert.equal(metrics.text, content);
+  assert.equal(metrics.fill, 'auto');
+  assert.equal(metrics.columns, '2');
+  assert.ok(metrics.xSpan < 8, 'all eight lines are in the left column');
+  assert.ok(metrics.scrollWidth <= metrics.clientWidth + 2, 'no unnecessary horizontal scrolling');
+});
+
+test('two-column split advances to the right only after the left column fills', async (t) => {
+  const content = Array.from({ length: 30 }, (_, i) => '段落 ' + (i + 1)).join('\n');
+  const page = await createFixture(t, {
+    saved: { 'memo_pages_video-a': record({ pages: [
+      { id: 'one', title: 'Longer', content, startTime: 0,
+        splitView: true, splitColumns: 2, splitHeight: 240 },
+    ] }) },
+  });
+  await ready(page);
+  const preview = page.locator('#youtube-memo-split-preview');
+  await preview.waitFor({ state: 'visible' });
+  const metrics = await preview.evaluate((el) => {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const rects = [...range.getClientRects()].filter((rect) => rect.width > 0);
+    const xs = rects.map((rect) => Math.round(rect.x));
+    return {
+      text: el.textContent,
+      fill: getComputedStyle(el).columnFill,
+      columns: getComputedStyle(el).columnCount,
+      xSpan: Math.max(...xs) - Math.min(...xs),
+      height: Math.round(el.getBoundingClientRect().height),
+      overflowX: getComputedStyle(el).overflowX,
+    };
+  });
+  assert.equal(metrics.text, content);
+  assert.equal(metrics.fill, 'auto');
+  assert.equal(metrics.columns, '2');
+  assert.equal(metrics.height, 240, 'the saved per-page height stays fixed');
+  assert.ok(metrics.xSpan > 80, 'overflow from the left continues in a right column');
+  assert.equal(metrics.overflowX, 'auto', 'additional columns remain scrollable');
 });
