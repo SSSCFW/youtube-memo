@@ -61,7 +61,7 @@ function fixtureHtml(videoId, options) {
 }
 
 // Stub only the extension API boundary. DOM, timers, observers and events remain Chromium's.
-function installStorage({ saved, holdReads, holdWrites }) {
+function installStorage({ saved, holdReads, holdWrites, getFailures = [], getThrows = [] }) {
   const clone = (value) => JSON.parse(JSON.stringify(value));
   const state = {
     data: clone(saved),
@@ -70,6 +70,9 @@ function installStorage({ saved, holdReads, holdWrites }) {
     writes: [],
     holdReads,
     holdWrites,
+    getFailures: [...getFailures],
+    getThrows: [...getThrows],
+    gets: 0,
   };
   window.chrome = window.chrome || {};
   chrome.runtime = chrome.runtime || {};
@@ -103,6 +106,8 @@ function installStorage({ saved, holdReads, holdWrites }) {
 
   chrome.storage = { local: {
     get(keys, callback) {
+      state.gets += 1;
+      if (state.getThrows.length) throw new Error(state.getThrows.shift());
       let resolve;
       let reject;
       const promise = callback ? undefined : new Promise((yes, no) => { resolve = yes; reject = no; });
@@ -113,7 +118,10 @@ function installStorage({ saved, holdReads, holdWrites }) {
         else if (keys && !Array.isArray(keys) && typeof keys === 'object') result[key] = clone(keys[key]);
       }
       const request = { keys: names, result, callback, resolve, reject };
-      if (state.holdReads) state.pendingReads.push(request);
+      if (state.getFailures.length) {
+        const failure = state.getFailures.shift();
+        setTimeout(() => complete(request, result, failure), 0);
+      } else if (state.holdReads) state.pendingReads.push(request);
       else setTimeout(() => complete(request, result), 0);
       return promise;
     },
@@ -150,6 +158,8 @@ async function createFixture(t, options = {}) {
     saved: options.saved || {},
     holdReads: options.holdReads || false,
     holdWrites: options.holdWrites || false,
+    getFailures: options.getFailures || [],
+    getThrows: options.getThrows || [],
   });
   await page.route('**/*', async (route) => {
     if (route.request().isNavigationRequest()) {
